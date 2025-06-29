@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+/web/build/
+/web/.cache/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Database and logs
+requests/*
+requests.db
+*.log
+proxy.log
+
+# Build artifacts
+bin/
+dist/
+*.exe
+
+# IDE and system files
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Claude-specific files
+.claude/
+CLAUDE.md
+
+# Test coverage
+coverage/
+*.cover
+*.test
+
+# Temporary files
+tmp/
+temp/
