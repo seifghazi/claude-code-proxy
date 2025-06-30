@@ -1,12 +1,12 @@
-# Claude Code Monitor
+# Claude Code Proxy
 
-![Claude Code Monitor Demo](demo.gif)
+![Claude Code Proxy Demo](demo.gif)
 
 A dual-purpose monitoring solution that serves as both a proxy for Claude Code requests and a visualization dashboard for your Claude API conversations.
 
 ## What It Does
 
-Claude Code Monitor serves two main purposes:
+Claude Code Proxy serves two main purposes:
 
 1. **Claude Code Proxy**: Intercepts and monitors requests from Claude Code (claude.ai/code) to the Anthropic API, allowing you to see what Claude Code is doing in real-time
 2. **Conversation Viewer**: Displays and analyzes your Claude API conversations with a beautiful web interface
@@ -35,10 +35,9 @@ Claude Code Monitor serves two main purposes:
    cd claude-code-monitor
    ```
 
-2. **Set up your API key**
+2. **Set up your environment variables**
    ```bash
    cp .env.example .env
-   # Edit .env and add your ANTHROPIC_API_KEY
    ```
 
 3. **Install and run** (first time)
@@ -65,6 +64,8 @@ To use this proxy with Claude Code, set:
 ```bash
 export ANTHROPIC_BASE_URL=http://localhost:3001
 ```
+
+Then launch Claude Code using the `claude` command.
 
 This will route Claude Code's requests through the proxy for monitoring.
 
