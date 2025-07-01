@@ -2,8 +2,11 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"strconv"
 	"time"
+
+	"github.com/joho/godotenv"
 )
 
 type Config struct {
@@ -31,6 +34,17 @@ type StorageConfig struct {
 }
 
 func Load() (*Config, error) {
+	// Load .env file if it exists
+	// Look for .env file in the project root (one level up from proxy/)
+	envPath := filepath.Join("..", ".env")
+	if err := godotenv.Load(envPath); err != nil {
+		// If .env doesn't exist in parent directory, try current directory
+		if err := godotenv.Load(".env"); err != nil {
+			// .env file is optional, so we just log and continue
+			// This allows the app to work with system environment variables only
+		}
+	}
+
 	cfg := &Config{
 		Server: ServerConfig{
 			Port:         getEnv("PORT", "3001"),
