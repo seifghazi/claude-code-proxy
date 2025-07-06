@@ -17,7 +17,7 @@ import (
 )
 
 type AnthropicService interface {
-	ForwardRequest(ctx context.Context, request *model.AnthropicRequest, apiKey string) (*http.Response, error)
+	ForwardRequest(ctx context.Context, request *model.AnthropicRequest, apiKey string, headers http.Header) (*http.Response, error)
 	GradePrompt(ctx context.Context, messages []model.AnthropicMessage, systemMessages []model.AnthropicSystemMessage, apiKey string) (*model.PromptGrade, error)
 }
 
@@ -35,9 +35,11 @@ func NewAnthropicService(cfg *config.AnthropicConfig) AnthropicService {
 	}
 }
 
-func (s *anthropicService) ForwardRequest(ctx context.Context, request *model.AnthropicRequest, apiKey string) (*http.Response, error) {
-	if apiKey == "" {
-		return nil, fmt.Errorf("API key not provided")
+func (s *anthropicService) ForwardRequest(ctx context.Context, request *model.AnthropicRequest, apiKey string, headers http.Header) (*http.Response, error) {
+	// Check if we have either an API key or Authorization header
+	authHeader := headers.Get("Authorization")
+	if apiKey == "" && authHeader == "" {
+		return nil, fmt.Errorf("API key or Authorization header not provided")
 	}
 
 	requestBody, err := json.Marshal(request)
@@ -66,9 +68,36 @@ func (s *anthropicService) ForwardRequest(ctx context.Context, request *model.An
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
+	// Forward all headers except those that should be managed by the proxy
+	excludedHeaders := map[string]bool{
+		"host":              true,
+		"connection":        true,
+		"proxy-connection":  true,
+		"proxy-authorization": true,
+		"content-length":    true,
+		"transfer-encoding": true,
+		"te":                true,
+		"trailer":           true,
+		"upgrade":           true,
+	}
+	
+	for name, values := range headers {
+		lowerName := strings.ToLower(name)
+		if !excludedHeaders[lowerName] {
+			for _, value := range values {
+				req.Header.Add(name, value)
+			}
+		}
+	}
+	
+	// Override with proxy-specific headers
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-api-key", apiKey)
 	req.Header.Set("anthropic-version", s.config.Version)
+	
+	// Set x-api-key header if provided (this might override a forwarded header)
+	if apiKey != "" {
+		req.Header.Set("x-api-key", apiKey)
+	}
 
 	resp, err := s.client.Do(req)
 	if err != nil {
@@ -104,7 +133,7 @@ func (s *anthropicService) GradePrompt(ctx context.Context, messages []model.Ant
 		},
 	}
 
-	resp, err := s.ForwardRequest(ctx, claudeRequest, apiKey)
+	resp, err := s.ForwardRequest(ctx, claudeRequest, apiKey, http.Header{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to send grading request: %w", err)
 	}

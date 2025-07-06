@@ -17,7 +17,9 @@ import {
   Wifi,
   Calendar,
   List,
-  FileText
+  FileText,
+  Wrench,
+  Coins
 } from 'lucide-react';
 import { MessageContent } from './MessageContent';
 import { formatJSON } from '../utils/formatters';
@@ -42,6 +44,20 @@ interface Request {
     max_tokens?: number;
     temperature?: number;
     stream?: boolean;
+    tools?: Array<{
+      name: string;
+      description: string;
+      input_schema: {
+        type: string;
+        properties?: Record<string, {
+          type: string;
+          description?: string;
+          enum?: string[];
+          items?: any;
+        }>;
+        required?: string[];
+      };
+    }>;
   };
   response?: {
     statusCode: number;
@@ -52,6 +68,12 @@ interface Request {
     streamingChunks?: string[];
     isStreaming: boolean;
     completedAt: string;
+    usage?: {
+      input_tokens: number;
+      output_tokens: number;
+      cache_creation_input_tokens?: number;
+      cache_read_input_tokens?: number;
+    };
   };
   promptGrade?: {
     score: number;
@@ -235,6 +257,54 @@ export default function RequestDetailContent({ request, onGrade }: RequestDetail
                       <div className="bg-white rounded p-3 border border-gray-200">
                         <MessageContent content={{ type: 'text', text: sys.text }} />
                       </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Tools Configuration */}
+          {request.body.tools && request.body.tools.length > 0 && (
+            <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+              <div 
+                className="bg-gray-50 px-6 py-4 border-b border-gray-200 cursor-pointer"
+                onClick={() => toggleSection('tools')}
+              >
+                <div className="flex items-center justify-between">
+                  <h4 className="text-lg font-semibold text-gray-900 flex items-center space-x-3">
+                    <Wrench className="w-5 h-5 text-indigo-600" />
+                    <span>Tools Configuration</span>
+                    <span className="text-xs bg-indigo-50 text-indigo-700 px-2 py-1 rounded-full border border-indigo-200">
+                      {request.body.tools.length} tools
+                    </span>
+                  </h4>
+                  <ChevronDown className={`w-5 h-5 text-gray-500 transition-transform ${
+                    expandedSections.tools ? 'rotate-180' : ''
+                  }`} />
+                </div>
+              </div>
+              {expandedSections.tools && (
+                <div className="p-6 space-y-4">
+                  {request.body.tools.map((tool, index) => (
+                    <div key={index} className="bg-indigo-50 border border-indigo-200 rounded-lg p-4">
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center space-x-2">
+                          <span className="text-indigo-700 font-semibold text-sm">{tool.name}</span>
+                          <span className="text-xs bg-indigo-100 text-indigo-600 px-2 py-1 rounded-full border border-indigo-300">
+                            Tool #{index + 1}
+                          </span>
+                        </div>
+                      </div>
+                      <p className="text-sm text-gray-700 mb-3">{tool.description}</p>
+                      {tool.input_schema && (
+                        <div className="bg-white rounded p-3 border border-gray-200">
+                          <div className="text-xs font-semibold text-gray-600 mb-2">Input Schema</div>
+                          <pre className="text-xs text-gray-700 overflow-x-auto">
+                            {JSON.stringify(tool.input_schema, null, 2)}
+                          </pre>
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -578,6 +648,62 @@ function ResponseDetails({ response }: { response: NonNullable<Request['response
               <div className="text-xs text-gray-700 opacity-75">{completedAt.split(' ')[0] || ''}</div>
             </div>
           </div>
+
+          {/* Token Usage */}
+          {response.usage && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-6">
+              <div className="flex items-center space-x-3 mb-4">
+                <Coins className="w-5 h-5 text-amber-600" />
+                <h5 className="text-lg font-semibold text-gray-900">Token Usage</h5>
+              </div>
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="bg-white border border-amber-200 rounded-lg p-4">
+                  <div className="text-xs text-gray-600 mb-1">Input Tokens</div>
+                  <div className="text-2xl font-bold text-amber-700">
+                    {response.usage.input_tokens.toLocaleString()}
+                  </div>
+                  <div className="text-xs text-gray-500">Standard input</div>
+                </div>
+                
+                <div className="bg-white border border-amber-200 rounded-lg p-4">
+                  <div className="text-xs text-gray-600 mb-1">Output Tokens</div>
+                  <div className="text-2xl font-bold text-amber-700">
+                    {response.usage.output_tokens.toLocaleString()}
+                  </div>
+                  <div className="text-xs text-gray-500">Generated tokens</div>
+                </div>
+                
+                <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                  <div className="text-xs text-gray-600 mb-1">Cache Read Tokens</div>
+                  <div className="text-2xl font-bold text-green-700">
+                    {(response.usage.cache_read_input_tokens || 0).toLocaleString()}
+                  </div>
+                  <div className="text-xs text-green-600">90% cheaper</div>
+                </div>
+                
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                  <div className="text-xs text-gray-600 mb-1">Cache Creation Tokens</div>
+                  <div className="text-2xl font-bold text-blue-700">
+                    {(response.usage.cache_creation_input_tokens || 0).toLocaleString()}
+                  </div>
+                  <div className="text-xs text-blue-600">25% more expensive</div>
+                </div>
+              </div>
+              
+              <div className="mt-4 pt-4 border-t border-amber-200">
+                <div className="flex items-center justify-between">
+                  <div className="text-sm text-gray-600">Total Input Tokens</div>
+                  <div className="text-lg font-semibold text-gray-900">
+                    {(
+                      response.usage.input_tokens + 
+                      (response.usage.cache_read_input_tokens || 0) + 
+                      (response.usage.cache_creation_input_tokens || 0)
+                    ).toLocaleString()}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Response Headers */}
           {response.headers && (
