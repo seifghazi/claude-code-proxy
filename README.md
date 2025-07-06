@@ -13,10 +13,12 @@ Claude Code Proxy serves two main purposes:
 
 ## Features
 
-- **Transparent Proxy**: Routes Claude Code requests through the monitor without disruption
+- **Transparent Proxy**: Routes Claude Code requests through the monitor without disruption with full header forwarding and compression support
 - **Request Monitoring**: SQLite-based logging of all API interactions
 - **Live Dashboard**: Real-time visualization of requests and responses
-- **Conversation Analysis**: View full conversation threads with tool usage
+- **Conversation Analysis**: View full conversation threads with tool usage and configuration
+- **Token Usage Tracking**: Monitor and display token consumption metrics for requests
+- **Tools Configuration Display**: View tool configurations and parameters in request details
 - **Easy Setup**: One-command startup for both services
 
 ## Quick Start
@@ -134,6 +136,8 @@ claude-code-monitor/
 - Searchable request history
 - Request/response body inspection
 - Conversation threading
+- Token usage tracking and analysis
+- Tools configuration monitoring
 
 ### Prompt Analysis
 - Automatic prompt grading
