@@ -64,6 +64,20 @@ interface Request {
     max_tokens?: number;
     temperature?: number;
     stream?: boolean;
+    tools?: Array<{
+      name: string;
+      description: string;
+      input_schema: {
+        type: string;
+        properties?: Record<string, {
+          type: string;
+          description?: string;
+          enum?: string[];
+          items?: any;
+        }>;
+        required?: string[];
+      };
+    }>;
   };
   response?: {
     statusCode: number;

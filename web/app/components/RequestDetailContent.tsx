@@ -17,7 +17,8 @@ import {
   Wifi,
   Calendar,
   List,
-  FileText
+  FileText,
+  Wrench
 } from 'lucide-react';
 import { MessageContent } from './MessageContent';
 import { formatJSON } from '../utils/formatters';
@@ -42,6 +43,20 @@ interface Request {
     max_tokens?: number;
     temperature?: number;
     stream?: boolean;
+    tools?: Array<{
+      name: string;
+      description: string;
+      input_schema: {
+        type: string;
+        properties?: Record<string, {
+          type: string;
+          description?: string;
+          enum?: string[];
+          items?: any;
+        }>;
+        required?: string[];
+      };
+    }>;
   };
   response?: {
     statusCode: number;
@@ -235,6 +250,54 @@ export default function RequestDetailContent({ request, onGrade }: RequestDetail
                       <div className="bg-white rounded p-3 border border-gray-200">
                         <MessageContent content={{ type: 'text', text: sys.text }} />
                       </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Tools Configuration */}
+          {request.body.tools && request.body.tools.length > 0 && (
+            <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+              <div 
+                className="bg-gray-50 px-6 py-4 border-b border-gray-200 cursor-pointer"
+                onClick={() => toggleSection('tools')}
+              >
+                <div className="flex items-center justify-between">
+                  <h4 className="text-lg font-semibold text-gray-900 flex items-center space-x-3">
+                    <Wrench className="w-5 h-5 text-indigo-600" />
+                    <span>Tools Configuration</span>
+                    <span className="text-xs bg-indigo-50 text-indigo-700 px-2 py-1 rounded-full border border-indigo-200">
+                      {request.body.tools.length} tools
+                    </span>
+                  </h4>
+                  <ChevronDown className={`w-5 h-5 text-gray-500 transition-transform ${
+                    expandedSections.tools ? 'rotate-180' : ''
+                  }`} />
+                </div>
+              </div>
+              {expandedSections.tools && (
+                <div className="p-6 space-y-4">
+                  {request.body.tools.map((tool, index) => (
+                    <div key={index} className="bg-indigo-50 border border-indigo-200 rounded-lg p-4">
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center space-x-2">
+                          <span className="text-indigo-700 font-semibold text-sm">{tool.name}</span>
+                          <span className="text-xs bg-indigo-100 text-indigo-600 px-2 py-1 rounded-full border border-indigo-300">
+                            Tool #{index + 1}
+                          </span>
+                        </div>
+                      </div>
+                      <p className="text-sm text-gray-700 mb-3">{tool.description}</p>
+                      {tool.input_schema && (
+                        <div className="bg-white rounded p-3 border border-gray-200">
+                          <div className="text-xs font-semibold text-gray-600 mb-2">Input Schema</div>
+                          <pre className="text-xs text-gray-700 overflow-x-auto">
+                            {JSON.stringify(tool.input_schema, null, 2)}
+                          </pre>
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
