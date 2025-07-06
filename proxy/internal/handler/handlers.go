@@ -381,6 +381,7 @@ func (h *Handler) handleStreamingResponse(w http.ResponseWriter, resp *http.Resp
 	var fullResponseText strings.Builder
 	var toolCalls []model.ContentBlock
 	var streamingChunks []string
+	var usageData *model.AnthropicUsage
 
 	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() {
@@ -403,6 +404,22 @@ func (h *Handler) handleStreamingResponse(w http.ResponseWriter, resp *http.Resp
 		}
 
 		switch event.Type {
+		case "message_start":
+			if event.Message != nil && event.Message.Usage != nil {
+				usageData = event.Message.Usage
+				log.Printf("📊 Captured usage from message_start: input=%d, cache_creation=%d, cache_read=%d, output=%d", 
+					usageData.InputTokens, usageData.CacheCreationInputTokens, usageData.CacheReadInputTokens, usageData.OutputTokens)
+			}
+		case "message_delta":
+			if event.Usage != nil {
+				// Update output tokens from message_delta
+				if usageData != nil {
+					usageData.OutputTokens = event.Usage.OutputTokens
+				} else {
+					usageData = event.Usage
+				}
+				log.Printf("📊 Updated usage from message_delta: output=%d", event.Usage.OutputTokens)
+			}
 		case "content_block_delta":
 			if event.Delta != nil {
 				if event.Delta.Type == "text_delta" {
@@ -430,6 +447,7 @@ func (h *Handler) handleStreamingResponse(w http.ResponseWriter, resp *http.Resp
 		ResponseTime:    time.Since(startTime).Milliseconds(),
 		IsStreaming:     true,
 		CompletedAt:     time.Now().Format(time.RFC3339),
+		Usage:           usageData,
 	}
 
 	// Create a structured body for the log
@@ -485,9 +503,34 @@ func (h *Handler) handleNonStreamingResponse(w http.ResponseWriter, resp *http.R
 
 	// Try to parse as JSON for structured logging using decompressed data
 	if strings.Contains(resp.Header.Get("Content-Type"), "application/json") {
-		var jsonBody interface{}
+		var jsonBody map[string]interface{}
 		if json.Unmarshal(decompressedBytes, &jsonBody) == nil {
 			responseLog.Body = jsonBody
+			
+			// Extract usage data if present
+			if usageRaw, ok := jsonBody["usage"]; ok {
+				if usageMap, ok := usageRaw.(map[string]interface{}); ok {
+					usage := &model.AnthropicUsage{}
+					if v, ok := usageMap["input_tokens"].(float64); ok {
+						usage.InputTokens = int(v)
+					}
+					if v, ok := usageMap["output_tokens"].(float64); ok {
+						usage.OutputTokens = int(v)
+					}
+					if v, ok := usageMap["cache_creation_input_tokens"].(float64); ok {
+						usage.CacheCreationInputTokens = int(v)
+					}
+					if v, ok := usageMap["cache_read_input_tokens"].(float64); ok {
+						usage.CacheReadInputTokens = int(v)
+					}
+					if v, ok := usageMap["service_tier"].(string); ok {
+						usage.ServiceTier = v
+					}
+					responseLog.Usage = usage
+					log.Printf("📊 Captured usage from non-streaming response: input=%d, cache_creation=%d, cache_read=%d, output=%d", 
+						usage.InputTokens, usage.CacheCreationInputTokens, usage.CacheReadInputTokens, usage.OutputTokens)
+				}
+			}
 		}
 	}
 

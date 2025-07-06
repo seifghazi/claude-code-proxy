@@ -28,7 +28,8 @@ import {
   Copy,
   Check,
   Lightbulb,
-  Loader2
+  Loader2,
+  Coins
 } from "lucide-react";
 
 import RequestDetailContent from "../components/RequestDetailContent";
@@ -88,6 +89,12 @@ interface Request {
     streamingChunks?: string[];
     isStreaming: boolean;
     completedAt: string;
+    usage?: {
+      input_tokens: number;
+      output_tokens: number;
+      cache_creation_input_tokens?: number;
+      cache_read_input_tokens?: number;
+    };
   };
   promptGrade?: {
     score: number;
@@ -335,6 +342,23 @@ export default function Index() {
     return colors[method as keyof typeof colors] || 'bg-gray-50 text-gray-700 border border-gray-200';
   };
 
+  const getCumulativeTokenStats = () => {
+    return requests.reduce((totals, request) => {
+      if (request.response?.usage) {
+        totals.inputTokens += request.response.usage.input_tokens || 0;
+        totals.outputTokens += request.response.usage.output_tokens || 0;
+        totals.cacheCreationInputTokens += request.response.usage.cache_creation_input_tokens || 0;
+        totals.cacheReadInputTokens += request.response.usage.cache_read_input_tokens || 0;
+      }
+      return totals;
+    }, {
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheCreationInputTokens: 0,
+      cacheReadInputTokens: 0
+    });
+  };
+
   const getRequestSummary = (request: Request) => {
     if (request.body?.messages) {
       const messageCount = request.body.messages.length;
@@ -347,8 +371,15 @@ export default function Index() {
         return count;
       }, 0);
       
-      // Count tool definitions in system prompt
+      // Count tool definitions from both sources
       let toolDefinitions = 0;
+      
+      // Count from structured tools array (modern format)
+      if (request.body.tools && Array.isArray(request.body.tools)) {
+        toolDefinitions += request.body.tools.length;
+      }
+      
+      // Count from system prompt XML (legacy format)
       if (request.body.system) {
         request.body.system.forEach(sys => {
           if (sys.text && sys.text.includes('<functions>')) {
@@ -364,6 +395,26 @@ export default function Index() {
       }
       if (toolCalls > 0) {
         summary += ` • ⚡ ${toolCalls} tool calls executed`;
+      }
+      
+      // Add token usage if available
+      if (request.response?.usage) {
+        const usage = request.response.usage;
+        const inputTokens = usage.input_tokens || 0;
+        const outputTokens = usage.output_tokens || 0;
+        const cacheWrite = usage.cache_creation_input_tokens || 0;
+        const cacheRead = usage.cache_read_input_tokens || 0;
+        
+        if (inputTokens > 0 || outputTokens > 0 || cacheWrite > 0 || cacheRead > 0) {
+          let tokenParts = [];
+          
+          if (inputTokens > 0) tokenParts.push(`${inputTokens.toLocaleString()} in`);
+          if (outputTokens > 0) tokenParts.push(`${outputTokens.toLocaleString()} out`);
+          if (cacheWrite > 0) tokenParts.push(`${cacheWrite.toLocaleString()} cache write`);
+          if (cacheRead > 0) tokenParts.push(`${cacheRead.toLocaleString()} cache read`);
+          
+          summary += ` • 🪙 tokens: ${tokenParts.join(', ')}`;
+        }
       }
       
       return summary;
@@ -633,28 +684,90 @@ export default function Index() {
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-6 py-8 space-y-8">
         {/* Stats Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-1 lg:grid-cols-1 gap-6">
-          <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
-            <div className="flex items-center justify-between">
-              <div className="space-y-2">
-                <p className="text-sm font-medium text-gray-500">
-                  {viewMode === "requests" ? "Total Requests" : "Total Conversations"}
-                </p>
-                <p className="text-2xl font-semibold text-gray-900">
-                  {viewMode === "requests" ? requests.length : conversations.length}
-                </p>
-                {/* <p className="text-xs text-gray-500">All time</p> */}
-              </div>
-              <div className="w-12 h-12 rounded-lg bg-blue-50 flex items-center justify-center">
-                {viewMode === "requests" ? (
+        {viewMode === "requests" ? (
+          <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-6">
+            <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
+              <div className="flex items-center justify-between">
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-gray-500">Total Requests</p>
+                  <p className="text-2xl font-semibold text-gray-900">{requests.length}</p>
+                </div>
+                <div className="w-12 h-12 rounded-lg bg-blue-50 flex items-center justify-center">
                   <Activity className="w-6 h-6 text-blue-600" />
-                ) : (
+                </div>
+              </div>
+            </div>
+            
+            {(() => {
+              const tokenStats = getCumulativeTokenStats();
+              return (
+                <>
+                  <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
+                    <div className="flex items-center justify-between">
+                      <div className="space-y-2">
+                        <p className="text-sm font-medium text-gray-500">Input Tokens</p>
+                        <p className="text-2xl font-semibold text-amber-700">{tokenStats.inputTokens.toLocaleString()}</p>
+                      </div>
+                      <div className="w-12 h-12 rounded-lg bg-amber-50 flex items-center justify-center">
+                        <Coins className="w-6 h-6 text-amber-600" />
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
+                    <div className="flex items-center justify-between">
+                      <div className="space-y-2">
+                        <p className="text-sm font-medium text-gray-500">Output Tokens</p>
+                        <p className="text-2xl font-semibold text-amber-700">{tokenStats.outputTokens.toLocaleString()}</p>
+                      </div>
+                      <div className="w-12 h-12 rounded-lg bg-amber-50 flex items-center justify-center">
+                        <Coins className="w-6 h-6 text-amber-600" />
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
+                    <div className="flex items-center justify-between">
+                      <div className="space-y-2">
+                        <p className="text-sm font-medium text-gray-500">Cache Read</p>
+                        <p className="text-2xl font-semibold text-green-700">{tokenStats.cacheReadInputTokens.toLocaleString()}</p>
+                      </div>
+                      <div className="w-12 h-12 rounded-lg bg-green-50 flex items-center justify-center">
+                        <Coins className="w-6 h-6 text-green-600" />
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
+                    <div className="flex items-center justify-between">
+                      <div className="space-y-2">
+                        <p className="text-sm font-medium text-gray-500">Cache Creation</p>
+                        <p className="text-2xl font-semibold text-blue-700">{tokenStats.cacheCreationInputTokens.toLocaleString()}</p>
+                      </div>
+                      <div className="w-12 h-12 rounded-lg bg-blue-50 flex items-center justify-center">
+                        <Coins className="w-6 h-6 text-blue-600" />
+                      </div>
+                    </div>
+                  </div>
+                </>
+              );
+            })()}
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-1 lg:grid-cols-1 gap-6">
+            <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
+              <div className="flex items-center justify-between">
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-gray-500">Total Conversations</p>
+                  <p className="text-2xl font-semibold text-gray-900">{conversations.length}</p>
+                </div>
+                <div className="w-12 h-12 rounded-lg bg-blue-50 flex items-center justify-center">
                   <MessageCircle className="w-6 h-6 text-blue-600" />
-                )}
+                </div>
               </div>
             </div>
           </div>
-        </div>
+        )}
 
         {/* Main Content */}
         {viewMode === "requests" ? (

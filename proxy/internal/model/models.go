@@ -48,6 +48,7 @@ type ResponseLog struct {
 	StreamingChunks []string            `json:"streamingChunks,omitempty"`
 	IsStreaming     bool                `json:"isStreaming"`
 	CompletedAt     string              `json:"completedAt"`
+	Usage           *AnthropicUsage     `json:"usage,omitempty"`
 }
 
 type ChatMessage struct {
@@ -80,6 +81,14 @@ type Usage struct {
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
 	TotalTokens      int `json:"total_tokens"`
+}
+
+type AnthropicUsage struct {
+	InputTokens               int    `json:"input_tokens"`
+	OutputTokens              int    `json:"output_tokens"`
+	CacheCreationInputTokens  int    `json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInputTokens      int    `json:"cache_read_input_tokens,omitempty"`
+	ServiceTier               string `json:"service_tier,omitempty"`
 }
 
 type AnthropicContentBlock struct {
@@ -182,10 +191,21 @@ type ErrorResponse struct {
 
 
 type StreamingEvent struct {
-	Type         string        `json:"type"`
-	Index        *int          `json:"index,omitempty"`
-	Delta        *Delta        `json:"delta,omitempty"`
-	ContentBlock *ContentBlock `json:"content_block,omitempty"`
+	Type         string          `json:"type"`
+	Index        *int            `json:"index,omitempty"`
+	Delta        *Delta          `json:"delta,omitempty"`
+	ContentBlock *ContentBlock   `json:"content_block,omitempty"`
+	Message      *StreamMessage  `json:"message,omitempty"`
+	Usage        *AnthropicUsage `json:"usage,omitempty"`
+}
+
+type StreamMessage struct {
+	ID           string          `json:"id"`
+	Type         string          `json:"type"`
+	Role         string          `json:"role"`
+	Content      []ContentBlock  `json:"content"`
+	Model        string          `json:"model"`
+	Usage        *AnthropicUsage `json:"usage,omitempty"`
 }
 
 type Delta struct {
