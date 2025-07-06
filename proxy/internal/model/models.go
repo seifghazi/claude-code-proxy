@@ -8,6 +8,7 @@ import (
 type ContextKey string
 
 const BodyBytesKey ContextKey = "bodyBytes"
+const DecompressedBodyKey ContextKey = "decompressedBody"
 
 type PromptGrade struct {
 	Score            int                      `json:"score"`

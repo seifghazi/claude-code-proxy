@@ -2,6 +2,8 @@ package handler
 
 import (
 	"bufio"
+	"bytes"
+	"compress/gzip"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -40,14 +42,14 @@ func New(anthropicService service.AnthropicService, storageService service.Stora
 func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 	log.Println("🤖 Chat completion request received (OpenAI format)")
 
-	bodyBytes := getBodyBytes(r)
-	if bodyBytes == nil {
+	decompressedBytes := getDecompressedBodyBytes(r)
+	if decompressedBytes == nil {
 		http.Error(w, "Error reading request body", http.StatusBadRequest)
 		return
 	}
 
 	var req model.ChatCompletionRequest
-	if err := json.Unmarshal(bodyBytes, &req); err != nil {
+	if err := json.Unmarshal(decompressedBytes, &req); err != nil {
 		log.Printf("❌ Error parsing JSON: %v", err)
 		writeErrorResponse(w, "Invalid JSON", http.StatusBadRequest)
 		return
@@ -119,14 +121,14 @@ func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) Messages(w http.ResponseWriter, r *http.Request) {
 	log.Println("🤖 Messages request received (Anthropic format)")
 
-	bodyBytes := getBodyBytes(r)
-	if bodyBytes == nil {
+	decompressedBytes := getDecompressedBodyBytes(r)
+	if decompressedBytes == nil {
 		http.Error(w, "Error reading request body", http.StatusBadRequest)
 		return
 	}
 
 	var req model.AnthropicRequest
-	if err := json.Unmarshal(bodyBytes, &req); err != nil {
+	if err := json.Unmarshal(decompressedBytes, &req); err != nil {
 		log.Printf("❌ Error parsing JSON: %v", err)
 		writeErrorResponse(w, "Invalid JSON", http.StatusBadRequest)
 		return
@@ -138,9 +140,12 @@ func (h *Handler) Messages(w http.ResponseWriter, r *http.Request) {
 		// Also check for X-Api-Key (capitalized version)
 		apiKey = r.Header.Get("X-Api-Key")
 	}
-	if apiKey == "" {
-		log.Println("❌ No API key provided in request headers")
-		writeErrorResponse(w, "API key required in x-api-key header", http.StatusUnauthorized)
+	
+	// Check if we have either an API key or Authorization header
+	authHeader := r.Header.Get("Authorization")
+	if apiKey == "" && authHeader == "" {
+		log.Println("❌ No API key or Authorization header provided in request headers")
+		writeErrorResponse(w, "API key (x-api-key header) or Authorization header required", http.StatusUnauthorized)
 		return
 	}
 
@@ -165,7 +170,7 @@ func (h *Handler) Messages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Forward the request to Anthropic
-	resp, err := h.anthropicService.ForwardRequest(r.Context(), &req, apiKey)
+	resp, err := h.anthropicService.ForwardRequest(r.Context(), &req, apiKey, r.Header)
 	if err != nil {
 		log.Printf("❌ Error forwarding to Anthropic API: %v", err)
 		writeErrorResponse(w, "Failed to forward request", http.StatusInternalServerError)
@@ -323,6 +328,14 @@ func (h *Handler) NotFound(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleStreamingResponse(w http.ResponseWriter, resp *http.Response, requestLog *model.RequestLog, startTime time.Time) {
 	log.Println("🌊 Streaming response detected, forwarding stream...")
 
+	// Copy all response headers to client first
+	for key, values := range resp.Header {
+		for _, value := range values {
+			w.Header().Add(key, value)
+		}
+	}
+	
+	// Override with streaming-specific headers
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -330,12 +343,20 @@ func (h *Handler) handleStreamingResponse(w http.ResponseWriter, resp *http.Resp
 	if resp.StatusCode != http.StatusOK {
 		log.Printf("❌ Anthropic API error: %d", resp.StatusCode)
 		errorBytes, _ := io.ReadAll(resp.Body)
-		log.Printf("Error details: %s", string(errorBytes))
+		
+		// Decompress error data for logging purposes only
+		decompressedErrorBytes, err := decompressForLogging(errorBytes, resp.Header)
+		if err != nil {
+			log.Printf("⚠️ Warning: Failed to decompress error response for logging: %v", err)
+			decompressedErrorBytes = errorBytes
+		}
+		
+		log.Printf("Error details: %s", string(decompressedErrorBytes))
 
 		responseLog := &model.ResponseLog{
 			StatusCode:   resp.StatusCode,
 			Headers:      SanitizeHeaders(resp.Header),
-			BodyText:     string(errorBytes),
+			BodyText:     string(decompressedErrorBytes), // Use decompressed data for logging
 			ResponseTime: time.Since(startTime).Milliseconds(),
 			IsStreaming:  true,
 			CompletedAt:  time.Now().Format(time.RFC3339),
@@ -346,8 +367,14 @@ func (h *Handler) handleStreamingResponse(w http.ResponseWriter, resp *http.Resp
 			log.Printf("❌ Error updating request with error response: %v", err)
 		}
 
+		// Copy error response headers to client
+		for key, values := range resp.Header {
+			for _, value := range values {
+				w.Header().Add(key, value)
+			}
+		}
 		w.WriteHeader(resp.StatusCode)
-		w.Write(errorBytes)
+		w.Write(errorBytes) // Send original (potentially compressed) data to client
 		return
 	}
 
@@ -439,19 +466,27 @@ func (h *Handler) handleNonStreamingResponse(w http.ResponseWriter, resp *http.R
 		return
 	}
 
+	// Decompress data for logging purposes only
+	decompressedBytes, err := decompressForLogging(responseBytes, resp.Header)
+	if err != nil {
+		log.Printf("⚠️ Warning: Failed to decompress response for logging: %v", err)
+		// Continue with original compressed data for logging
+		decompressedBytes = responseBytes
+	}
+
 	responseLog := &model.ResponseLog{
 		StatusCode:   resp.StatusCode,
 		Headers:      SanitizeHeaders(resp.Header),
-		BodyText:     string(responseBytes),
+		BodyText:     string(decompressedBytes), // Use decompressed data for logging
 		ResponseTime: time.Since(startTime).Milliseconds(),
 		IsStreaming:  false,
 		CompletedAt:  time.Now().Format(time.RFC3339),
 	}
 
-	// Try to parse as JSON for structured logging
-	if resp.Header.Get("Content-Type") == "application/json" {
+	// Try to parse as JSON for structured logging using decompressed data
+	if strings.Contains(resp.Header.Get("Content-Type"), "application/json") {
 		var jsonBody interface{}
-		if json.Unmarshal(responseBytes, &jsonBody) == nil {
+		if json.Unmarshal(decompressedBytes, &jsonBody) == nil {
 			responseLog.Body = jsonBody
 		}
 	}
@@ -462,16 +497,29 @@ func (h *Handler) handleNonStreamingResponse(w http.ResponseWriter, resp *http.R
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		log.Printf("❌ Anthropic API error: %d %s", resp.StatusCode, string(responseBytes))
-		w.Header().Set("Content-Type", "application/json")
+		log.Printf("❌ Anthropic API error: %d %s", resp.StatusCode, string(decompressedBytes))
+		
+		// Copy error response headers to client
+		for key, values := range resp.Header {
+			for _, value := range values {
+				w.Header().Add(key, value)
+			}
+		}
 		w.WriteHeader(resp.StatusCode)
-		w.Write(responseBytes)
+		w.Write(responseBytes) // Send original (potentially compressed) data to client
 		return
 	}
 
 	log.Println("✅ Successfully forwarded request to Anthropic API")
-	w.Header().Set("Content-Type", "application/json")
-	w.Write(responseBytes)
+	
+	// Copy all response headers to client
+	for key, values := range resp.Header {
+		for _, value := range values {
+			w.Header().Add(key, value)
+		}
+	}
+	w.WriteHeader(resp.StatusCode)
+	w.Write(responseBytes) // Send original (potentially compressed) data to client
 }
 
 func generateRequestID() string {
@@ -485,6 +533,14 @@ func getBodyBytes(r *http.Request) []byte {
 		return bodyBytes
 	}
 	return nil
+}
+
+func getDecompressedBodyBytes(r *http.Request) []byte {
+	if bodyBytes, ok := r.Context().Value(model.DecompressedBodyKey).([]byte); ok {
+		return bodyBytes
+	}
+	// Fallback to original body bytes if decompressed not available
+	return getBodyBytes(r)
 }
 
 func writeJSONResponse(w http.ResponseWriter, data interface{}) {
@@ -686,4 +742,27 @@ func (h *Handler) GetConversationsByProject(w http.ResponseWriter, r *http.Reque
 	}
 
 	writeJSONResponse(w, conversations)
+}
+
+// decompressForLogging decompresses gzip content for logging purposes only
+// It does not affect the transparent proxy behavior
+func decompressForLogging(data []byte, headers http.Header) ([]byte, error) {
+	// Check if response is gzip-compressed
+	if strings.Contains(strings.ToLower(headers.Get("Content-Encoding")), "gzip") {
+		reader, err := gzip.NewReader(bytes.NewReader(data))
+		if err != nil {
+			return data, fmt.Errorf("failed to create gzip reader: %w", err)
+		}
+		defer reader.Close()
+
+		decompressed, err := io.ReadAll(reader)
+		if err != nil {
+			return data, fmt.Errorf("failed to decompress gzip data: %w", err)
+		}
+
+		return decompressed, nil
+	}
+
+	// Return original data if not gzip-compressed
+	return data, nil
 }
