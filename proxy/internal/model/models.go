@@ -41,7 +41,7 @@ type RequestLog struct {
 type ResponseLog struct {
 	StatusCode      int                 `json:"statusCode"`
 	Headers         map[string][]string `json:"headers"`
-	Body            interface{}         `json:"body,omitempty"`
+	Body            json.RawMessage     `json:"body,omitempty"`
 	BodyText        string              `json:"bodyText,omitempty"`
 	ResponseTime    int64               `json:"responseTime"`
 	StreamingChunks []string            `json:"streamingChunks,omitempty"`
@@ -60,25 +60,23 @@ type ChatCompletionRequest struct {
 	Stream   bool          `json:"stream,omitempty"`
 }
 
-type ChatCompletionResponse struct {
-	ID      string   `json:"id"`
-	Object  string   `json:"object"`
-	Created int64    `json:"created"`
-	Model   string   `json:"model"`
-	Choices []Choice `json:"choices"`
-	Usage   Usage    `json:"usage"`
+type AnthropicUsage struct {
+	InputTokens              int    `json:"input_tokens"`
+	OutputTokens             int    `json:"output_tokens"`
+	CacheCreationInputTokens int    `json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInputTokens     int    `json:"cache_read_input_tokens,omitempty"`
+	ServiceTier              string `json:"service_tier,omitempty"`
 }
 
-type Choice struct {
-	Index        int         `json:"index"`
-	Message      ChatMessage `json:"message"`
-	FinishReason string      `json:"finish_reason"`
-}
-
-type Usage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
+type AnthropicResponse struct {
+	Content      []AnthropicContentBlock `json:"content"`
+	ID           string                  `json:"id"`
+	Model        string                  `json:"model"`
+	Role         string                  `json:"role"`
+	StopReason   string                  `json:"stop_reason"`
+	StopSequence *string                 `json:"stop_sequence"`
+	Type         string                  `json:"type"`
+	Usage        AnthropicUsage          `json:"usage"`
 }
 
 type AnthropicContentBlock struct {
@@ -178,7 +176,6 @@ type ErrorResponse struct {
 	Error   string `json:"error"`
 	Details string `json:"details,omitempty"`
 }
-
 
 type StreamingEvent struct {
 	Type         string        `json:"type"`

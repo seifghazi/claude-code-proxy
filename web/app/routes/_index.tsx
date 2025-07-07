@@ -68,7 +68,16 @@ interface Request {
   response?: {
     statusCode: number;
     headers: Record<string, string[]>;
-    body?: any;
+    body?: {
+      usage?: {
+        input_tokens?: number;
+        output_tokens?: number;
+        cache_creation_input_tokens?: number;
+        cache_read_input_tokens?: number;
+        service_tier?: string;
+      };
+      [key: string]: any;
+    };
     bodyText?: string;
     responseTime: number;
     streamingChunks?: string[];
@@ -222,17 +231,13 @@ export default function Index() {
     }
   };
 
-  const loadConversations = async (filter?: string, loadMore = false) => {
+  const loadConversations = async (loadMore = false) => {
     setIsFetching(true);
     const pageToFetch = loadMore ? conversationsCurrentPage + 1 : 1;
     try {
-      const currentModelFilter = filter || modelFilter;
       const url = new URL('/api/conversations', window.location.origin);
       url.searchParams.append("page", pageToFetch.toString());
       url.searchParams.append("limit", itemsPerPage.toString());
-      if (currentModelFilter !== "all") {
-        url.searchParams.append("model", currentModelFilter);
-      }
       
       const response = await fetch(url.toString());
       if (!response.ok) {
@@ -322,39 +327,39 @@ export default function Index() {
   };
 
   const getRequestSummary = (request: Request) => {
-    if (request.body?.messages) {
-      const messageCount = request.body.messages.length;
+    const parts = [];
+    
+    // Add token usage if available
+    if (request.response?.body?.usage) {
+      const usage = request.response.body.usage;
+      const inputTokens = usage.input_tokens || 0;
+      const outputTokens = usage.output_tokens || 0;
+      const totalTokens = inputTokens + outputTokens;
       
-      // Count tool calls
-      const toolCalls = request.body.messages.reduce((count, msg) => {
-        if (msg.content && Array.isArray(msg.content)) {
-          return count + msg.content.filter((c: any) => c.type === 'tool_use').length;
+      if (totalTokens > 0) {
+        parts.push(`🪙 ${totalTokens.toLocaleString()} tokens`);
+        
+        if (usage.cache_read_input_tokens) {
+          parts.push(`💾 ${usage.cache_read_input_tokens.toLocaleString()} cached`);
         }
-        return count;
-      }, 0);
-      
-      // Count tool definitions in system prompt
-      let toolDefinitions = 0;
-      if (request.body.system) {
-        request.body.system.forEach(sys => {
-          if (sys.text && sys.text.includes('<functions>')) {
-            const functionMatches = [...sys.text.matchAll(/<function>([\s\S]*?)<\/function>/g)];
-            toolDefinitions += functionMatches.length;
-          }
-        });
       }
-      
-      let summary = `💬 ${messageCount} messages`;
-      if (toolDefinitions > 0) {
-        summary += ` • 🛠️ ${toolDefinitions} tools available`;
-      }
-      if (toolCalls > 0) {
-        summary += ` • ⚡ ${toolCalls} tool calls executed`;
-      }
-      
-      return summary;
     }
-    return '📡 API request';
+    
+    // Add response time if available
+    if (request.response?.responseTime) {
+      const seconds = (request.response.responseTime / 1000).toFixed(1);
+      parts.push(`⏱️ ${seconds}s`);
+    }
+    
+    // Add model if available
+    if (request.body?.model) {
+      const modelShort = request.body.model.includes('opus') ? 'Opus' :
+                         request.body.model.includes('sonnet') ? 'Sonnet' :
+                         request.body.model.includes('haiku') ? 'Haiku' : 'Model';
+      parts.push(`🤖 ${modelShort}`);
+    }
+    
+    return parts.length > 0 ? parts.join(' • ') : '📡 API request';
   };
 
   const showRequestDetails = (requestId: number) => {
@@ -495,7 +500,7 @@ export default function Index() {
     if (viewMode === 'requests') {
       loadRequests(modelFilter);
     } else {
-      loadConversations(modelFilter);
+      loadConversations();
     }
   }, [viewMode, modelFilter]);
 
@@ -504,139 +509,122 @@ export default function Index() {
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
-      <header className="sticky top-0 z-40 bg-white/80 backdrop-blur-md border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-6 py-4">
+      <header className="sticky top-0 z-40 bg-white border-b border-gray-200">
+        <div className="max-w-7xl mx-auto px-6 py-3">
           <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-4">
-              <div className="flex items-center space-x-3">
-                <div className="w-10 h-10 rounded-lg bg-blue-600 flex items-center justify-center">
-                  <Activity className="w-5 h-5 text-white" />
-                </div>
-                <div>
-                  <h1 className="text-xl font-semibold text-gray-900">Claude Code Monitor</h1>
-                </div>
-              </div>
-            </div>
             <div className="flex items-center space-x-3">
-              <div className="flex items-center space-x-2">
-                <button
-                  onClick={() => loadRequests()}
-                  className="p-2 rounded-lg bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors"
-                  title="Refresh"
-                >
-                  <RefreshCw className="w-5 h-5" />
-                </button>
-                <button
-                  onClick={clearRequests}
-                  className="p-2 rounded-lg bg-red-100 text-red-700 hover:bg-red-200 transition-colors"
-                  title="Clear all requests"
-                >
-                  <Trash2 className="w-5 h-5" />
-                </button>
-              </div>
+              <h1 className="text-lg font-semibold text-gray-900">Claude Code Monitor</h1>
+            </div>
+            <div className="flex items-center space-x-2">
+              <button
+                onClick={() => loadRequests()}
+                className="p-1.5 text-gray-600 hover:bg-gray-100 rounded transition-colors"
+                title="Refresh"
+              >
+                <RefreshCw className="w-4 h-4" />
+              </button>
+              <button
+                onClick={clearRequests}
+                className="p-1.5 text-red-600 hover:bg-red-50 rounded transition-colors"
+                title="Clear all requests"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
             </div>
           </div>
         </div>
       </header>
 
-      {/* Filter buttons */}
-      <div className="mb-6 flex justify-center">
-        <div className="inline-flex items-center bg-gray-100/80 rounded-lg p-1 space-x-1">
-          <button
-            onClick={() => handleModelFilterChange("all")}
-            className={`px-4 py-2 rounded-md text-sm font-semibold transition-all duration-200 ${
-              modelFilter === "all"
-                ? "bg-white text-blue-600 shadow-sm"
-                : "bg-transparent text-gray-600 hover:text-gray-900"
-            }`}
-          >
-            All Models
-          </button>
-          <button
-            onClick={() => handleModelFilterChange("opus")}
-            className={`px-4 py-2 rounded-md text-sm font-semibold transition-all duration-200 flex items-center space-x-2 ${
-              modelFilter === "opus"
-                ? "bg-white text-purple-600 shadow-sm"
-                : "bg-transparent text-gray-600 hover:text-gray-900"
-            }`}
-          >
-            <Brain className="w-4 h-4" />
-            <span>Opus</span>
-          </button>
-          <button
-            onClick={() => handleModelFilterChange("sonnet")}
-            className={`px-4 py-2 rounded-md text-sm font-semibold transition-all duration-200 flex items-center space-x-2 ${
-              modelFilter === "sonnet"
-                ? "bg-white text-indigo-600 shadow-sm"
-                : "bg-transparent text-gray-600 hover:text-gray-900"
-            }`}
-          >
-            <Sparkles className="w-4 h-4" />
-            <span>Sonnet</span>
-          </button>
-          <button
-            onClick={() => handleModelFilterChange("haiku")}
-            className={`px-4 py-2 rounded-md text-sm font-semibold transition-all duration-200 flex items-center space-x-2 ${
-              modelFilter === "haiku"
-                ? "bg-white text-teal-600 shadow-sm"
-                : "bg-transparent text-gray-600 hover:text-gray-900"
-            }`}
-          >
-            <Zap className="w-4 h-4" />
-            <span>Haiku</span>
-          </button>
-        </div>
-      </div>
-
       {/* View mode toggle */}
-      <div className="mb-6 flex justify-center">
-        <div className="p-1 bg-gray-200 rounded-full flex items-center">
+      <div className="mb-4 flex justify-center">
+        <div className="inline-flex items-center bg-gray-100 rounded p-0.5">
           <button
             onClick={() => setViewMode("requests")}
-            className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+            className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${
               viewMode === "requests"
                 ? "bg-white text-gray-900 shadow-sm"
                 : "text-gray-600 hover:text-gray-900"
             }`}
           >
-            <List className="w-4 h-4 inline mr-1" />
             Requests
           </button>
           <button
             onClick={() => setViewMode("conversations")}
-            className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+            className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${
               viewMode === "conversations"
                 ? "bg-white text-gray-900 shadow-sm"
                 : "text-gray-600 hover:text-gray-900"
             }`}
           >
-            <MessageCircle className="w-4 h-4 inline mr-1" />
             Conversations
           </button>
         </div>
       </div>
 
+      {/* Filter buttons - only show for requests view */}
+      {viewMode === "requests" && (
+        <div className="mb-6 flex justify-center">
+          <div className="inline-flex items-center bg-gray-100 rounded p-0.5 space-x-0.5">
+            <button
+              onClick={() => handleModelFilterChange("all")}
+              className={`px-3 py-1.5 rounded text-xs font-medium transition-all duration-200 ${
+                modelFilter === "all"
+                  ? "bg-white text-gray-900 shadow-sm"
+                  : "bg-transparent text-gray-600 hover:text-gray-900"
+              }`}
+            >
+              All Models
+            </button>
+            <button
+              onClick={() => handleModelFilterChange("opus")}
+              className={`px-3 py-1.5 rounded text-xs font-medium transition-all duration-200 flex items-center space-x-1 ${
+                modelFilter === "opus"
+                  ? "bg-white text-purple-600 shadow-sm"
+                  : "bg-transparent text-gray-600 hover:text-gray-900"
+              }`}
+            >
+              <Brain className="w-3 h-3" />
+              <span>Opus</span>
+            </button>
+            <button
+              onClick={() => handleModelFilterChange("sonnet")}
+              className={`px-3 py-1.5 rounded text-xs font-medium transition-all duration-200 flex items-center space-x-1 ${
+                modelFilter === "sonnet"
+                  ? "bg-white text-indigo-600 shadow-sm"
+                  : "bg-transparent text-gray-600 hover:text-gray-900"
+              }`}
+            >
+              <Sparkles className="w-3 h-3" />
+              <span>Sonnet</span>
+            </button>
+            <button
+              onClick={() => handleModelFilterChange("haiku")}
+              className={`px-3 py-1.5 rounded text-xs font-medium transition-all duration-200 flex items-center space-x-1 ${
+                modelFilter === "haiku"
+                  ? "bg-white text-teal-600 shadow-sm"
+                  : "bg-transparent text-gray-600 hover:text-gray-900"
+              }`}
+            >
+              <Zap className="w-3 h-3" />
+              <span>Haiku</span>
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-6 py-8 space-y-8">
         {/* Stats Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-1 lg:grid-cols-1 gap-6">
-          <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
+        <div className="mb-6">
+          <div className="bg-white border border-gray-200 rounded-lg p-4">
             <div className="flex items-center justify-between">
-              <div className="space-y-2">
-                <p className="text-sm font-medium text-gray-500">
+              <div>
+                <p className="text-xs font-medium text-gray-500 uppercase tracking-wider">
                   {viewMode === "requests" ? "Total Requests" : "Total Conversations"}
                 </p>
-                <p className="text-2xl font-semibold text-gray-900">
+                <p className="text-2xl font-semibold text-gray-900 mt-1">
                   {viewMode === "requests" ? requests.length : conversations.length}
                 </p>
-                {/* <p className="text-xs text-gray-500">All time</p> */}
-              </div>
-              <div className="w-12 h-12 rounded-lg bg-blue-50 flex items-center justify-center">
-                {viewMode === "requests" ? (
-                  <Activity className="w-6 h-6 text-blue-600" />
-                ) : (
-                  <MessageCircle className="w-6 h-6 text-blue-600" />
-                )}
               </div>
             </div>
           </div>
@@ -645,108 +633,101 @@ export default function Index() {
         {/* Main Content */}
         {viewMode === "requests" ? (
           /* Request History */
-          <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
-            <div className="bg-gray-50 px-6 py-4 border-b border-gray-200">
+          <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+            <div className="bg-gray-50 px-4 py-3 border-b border-gray-200">
               <div className="flex items-center justify-between">
-                <div className="flex items-center space-x-3">
-                  <List className="w-5 h-5 text-blue-600" />
-                  <h2 className="text-lg font-semibold text-gray-900">Request History</h2>
-                </div>
-                {/* <div className="flex items-center space-x-3">
-                  <select 
-                    value={filter}
-                    onChange={(e) => setFilter(e.target.value)}
-                    className="bg-white border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
-                  >
-                    <option value="all">All Requests</option>
-                    <option value="messages">Messages</option>
-                    <option value="completions">Completions</option>
-                    <option value="models">Models</option>
-                  </select>
-                </div> */}
+                <h2 className="text-sm font-semibold text-gray-900 uppercase tracking-wider">Request History</h2>
               </div>
             </div>
             <div className="divide-y divide-gray-200">
               {(isFetching && requestsCurrentPage === 1) || isPending ? (
-                <div className="p-12 text-center">
-                  <Loader2 className="w-8 h-8 mx-auto animate-spin text-gray-400" />
-                  <p className="mt-4 text-sm text-gray-500">Loading requests...</p>
+                <div className="p-8 text-center">
+                  <Loader2 className="w-6 h-6 mx-auto animate-spin text-gray-400" />
+                  <p className="mt-2 text-xs text-gray-500">Loading requests...</p>
                 </div>
               ) : filteredRequests.length === 0 ? (
-                <div className="p-12 text-center text-gray-500">
-                  <div className="w-20 h-20 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-6">
-                    <Inbox className="w-10 h-10 text-gray-400" />
-                  </div>
-                  <h3 className="text-lg font-medium text-gray-600 mb-2">No requests found</h3>
-                  <p className="text-sm text-gray-500">Make sure you have set the <code>ANTHROPIC_BASE_URL</code> environment variable to the proxy server URL</p>
+                <div className="p-8 text-center text-gray-500">
+                  <h3 className="text-sm font-medium text-gray-600 mb-1">No requests found</h3>
+                  <p className="text-xs text-gray-500">Make sure you have set <code className="font-mono bg-gray-100 px-1 py-0.5 rounded">ANTHROPIC_BASE_URL</code> to point at the proxy</p>
                 </div>
               ) : (
                 <>
                   {filteredRequests.map(request => (
-                    <div key={request.id} className="p-6 hover:bg-gray-50 transition-colors cursor-pointer" onClick={() => showRequestDetails(request.id)}>
-                      <div className="flex items-center justify-between mb-4">
-                        <div className="flex items-center space-x-4 flex-1">
-                          <span className={`method-badge ${getMethodColor(request.method)} px-3 py-1.5 rounded-lg text-xs font-semibold uppercase tracking-wide`}>
-                            {request.method}
-                          </span>
-                          <div className="flex flex-col">
-                            <div className="flex items-center space-x-2">
-                              <span className="text-gray-900 font-semibold text-base">{request.endpoint}</span>
-                              {request.conversationId && (
-                                <span className="text-xs bg-purple-50 border border-purple-200 text-purple-700 px-2 py-1 rounded-full">
-                                  Turn {request.turnNumber}
+                    <div key={request.id} className="px-4 py-3 hover:bg-gray-50 transition-colors cursor-pointer border-b border-gray-100 last:border-b-0" onClick={() => showRequestDetails(request.id)}>
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1 min-w-0 mr-4">
+                          {/* Model and Status */}
+                          <div className="flex items-center space-x-3 mb-1">
+                            <h3 className="text-sm font-medium">
+                              {request.body?.model ? (
+                                request.body.model.includes('opus') ? <span className="text-purple-600 font-semibold">Opus</span> :
+                                request.body.model.includes('sonnet') ? <span className="text-indigo-600 font-semibold">Sonnet</span> :
+                                request.body.model.includes('haiku') ? <span className="text-teal-600 font-semibold">Haiku</span> :
+                                <span className="text-gray-900">{request.body.model.split('-')[0]}</span>
+                              ) : <span className="text-gray-900">API</span>}
+                            </h3>
+                            {request.response?.statusCode && (
+                              <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${
+                                request.response.statusCode >= 200 && request.response.statusCode < 300 
+                                  ? 'bg-green-100 text-green-700' 
+                                  : request.response.statusCode >= 300 && request.response.statusCode < 400
+                                  ? 'bg-yellow-100 text-yellow-700'
+                                  : 'bg-red-100 text-red-700'
+                              }`}>
+                                {request.response.statusCode}
+                              </span>
+                            )}
+                            {request.conversationId && (
+                              <span className="text-xs px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded font-medium">
+                                Turn {request.turnNumber}
+                              </span>
+                            )}
+                          </div>
+                          
+                          {/* Endpoint */}
+                          <div className="text-xs text-gray-600 font-mono mb-1">
+                            {request.endpoint}
+                          </div>
+                          
+                          {/* Metrics Row */}
+                          <div className="flex items-center space-x-3 text-xs">
+                            {request.response?.body?.usage && (
+                              <>
+                                <span className="font-mono text-gray-600">
+                                  <span className="font-medium text-gray-900">{((request.response.body.usage.input_tokens || 0) + (request.response.body.usage.output_tokens || 0)).toLocaleString()}</span> tokens
                                 </span>
-                              )}
-                            </div>
-                            <span className="text-gray-500 text-sm">{new Date(request.timestamp).toLocaleString()}</span>
+                                {request.response.body.usage.cache_read_input_tokens && (
+                                  <span className="font-mono bg-green-50 text-green-700 px-1.5 py-0.5 rounded">
+                                    {request.response.body.usage.cache_read_input_tokens.toLocaleString()} cached
+                                  </span>
+                                )}
+                              </>
+                            )}
+                            
+                            {request.response?.responseTime && (
+                              <span className="font-mono text-gray-600">
+                                <span className="font-medium text-gray-900">{(request.response.responseTime / 1000).toFixed(2)}</span>s
+                              </span>
+                            )}
                           </div>
                         </div>
-                        <div className="flex items-center space-x-3">
-                          {request.body?.model && (
-                            <span className="text-xs bg-blue-50 border border-blue-200 text-blue-700 px-3 py-1.5 rounded-lg font-medium">
-                              {request.body.model}
-                            </span>
-                          )}
-                          {/* {request.promptGrade ? (
-                            <span className={`text-xs px-2 py-1 rounded-lg font-medium border ${
-                              request.promptGrade.score >= 4 
-                                ? 'bg-green-50 border-green-200 text-green-700' 
-                                : request.promptGrade.score >= 3 
-                                ? 'bg-yellow-50 border-yellow-200 text-yellow-700' 
-                                : 'bg-red-50 border-red-200 text-red-700'
-                            }`}>
-                              {request.promptGrade.score >= 4 ? '🎉' : request.promptGrade.score >= 3 ? '👍' : '⚠️'} {request.promptGrade.score}/5
-                            </span>
-                          ) : (
-                            canGradeRequest(request) && (
-                              <button 
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  gradeRequest(request.id);
-                                }}
-                                className="text-xs bg-purple-50 border border-purple-200 text-purple-700 px-3 py-1.5 rounded-lg font-medium hover:bg-purple-100 transition-colors flex items-center space-x-1"
-                              >
-                                <Target className="w-3 h-3" />
-                                <span>Grade Prompt</span>
-                              </button>
-                            )
-                          )} */}
-                          <div className="w-8 h-8 bg-gray-100 rounded-lg flex items-center justify-center">
-                            <ChevronRight className="w-4 h-4 text-gray-400" />
+                        <div className="flex-shrink-0 text-right">
+                          <div className="text-xs text-gray-500">
+                            {new Date(request.timestamp).toLocaleDateString()}
+                          </div>
+                          <div className="text-xs text-gray-400">
+                            {new Date(request.timestamp).toLocaleTimeString()}
                           </div>
                         </div>
-                      </div>
-                      <div className="text-gray-600 text-sm bg-gray-50 rounded-lg p-3 border border-gray-200">
-                        {getRequestSummary(request)}
                       </div>
                     </div>
                   ))}
                   {hasMoreRequests && (
-                    <div className="p-4 text-center">
+                    <div className="p-3 text-center border-t border-gray-100">
                       <button
                         onClick={() => loadRequests(modelFilter, true)}
                         disabled={isFetching}
-                        className="px-4 py-2 text-sm font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:bg-blue-300 transition-colors"
+                        className="px-3 py-1.5 text-xs font-medium text-gray-700 bg-gray-100 rounded hover:bg-gray-200 disabled:opacity-50 transition-colors"
                       >
                         {isFetching ? "Loading..." : "Load More"}
                       </button>
@@ -758,73 +739,77 @@ export default function Index() {
           </div>
         ) : (
           /* Conversations View */
-          <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
-            <div className="bg-gray-50 px-6 py-4 border-b border-gray-200">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center space-x-3">
-                  <MessageCircle className="w-5 h-5 text-blue-600" />
-                  <h2 className="text-lg font-semibold text-gray-900">Conversations</h2>
-                </div>
-              </div>
+          <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+            <div className="bg-gray-50 px-4 py-3 border-b border-gray-200">
+              <h2 className="text-sm font-semibold text-gray-900 uppercase tracking-wider">Conversations</h2>
             </div>
             <div className="divide-y divide-gray-200">
               {(isFetching && conversationsCurrentPage === 1) || isPending ? (
-                <div className="p-12 text-center">
-                  <Loader2 className="w-8 h-8 mx-auto animate-spin text-gray-400" />
-                  <p className="mt-4 text-sm text-gray-500">Loading conversations...</p>
+                <div className="p-8 text-center">
+                  <Loader2 className="w-6 h-6 mx-auto animate-spin text-gray-400" />
+                  <p className="mt-2 text-xs text-gray-500">Loading conversations...</p>
                 </div>
               ) : conversations.length === 0 ? (
-                <div className="p-12 text-center text-gray-500">
-                  <div className="w-20 h-20 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-6">
-                    <MessageCircle className="w-10 h-10 text-gray-400" />
-                  </div>
-                  <h3 className="text-lg font-medium text-gray-600 mb-2">No conversations found</h3>
-                  <p className="text-sm text-gray-500">Start a conversation to see it appear here</p>
+                <div className="p-8 text-center text-gray-500">
+                  <h3 className="text-sm font-medium text-gray-600 mb-1">No conversations found</h3>
+                  <p className="text-xs text-gray-500">Start a conversation to see it appear here</p>
                 </div>
               ) : (
                 <>
                   {conversations.map(conversation => (
-                    <div key={conversation.id} className="p-6 hover:bg-gray-50 transition-colors cursor-pointer" onClick={() => loadConversationDetails(conversation.id, conversation.projectName)}>
-                      <div className="flex items-center justify-between mb-4">
-                        <div className="flex items-center space-x-4 flex-1">
-                          <div className="w-12 h-12 rounded-lg bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center">
-                            <MessageCircle className="w-6 h-6 text-white" />
-                          </div>
-                          <div className="flex flex-col">
-                            <span className="text-gray-900 font-semibold text-base">Conversation {conversation.id.slice(-8)}</span>
-                            <span className="text-gray-500 text-sm">{new Date(conversation.startTime).toLocaleString()}</span>
+                    <div key={conversation.id} className="px-4 py-4 hover:bg-gray-50 transition-colors cursor-pointer border-b border-gray-100 last:border-b-0" onClick={() => loadConversationDetails(conversation.id, conversation.projectName)}>
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1 min-w-0 mr-4">
+                          <div className="flex items-center space-x-2 mb-2">
+                            <span className="text-sm font-semibold text-gray-900 font-mono">
+                              #{conversation.id.slice(-8)}
+                            </span>
+                            <span className="text-xs px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full font-medium">
+                              {conversation.requestCount} turns
+                            </span>
+                            <span className="text-xs px-2 py-0.5 bg-gray-100 text-gray-700 rounded-full">
+                              {formatDuration(conversation.duration)}
+                            </span>
                             {conversation.projectName && (
-                              <span className="text-xs text-purple-600 font-medium">{conversation.projectName}</span>
+                              <span className="text-xs px-2 py-0.5 bg-purple-100 text-purple-700 rounded-full font-medium">
+                                {conversation.projectName}
+                              </span>
+                            )}
+                          </div>
+                          <div className="space-y-2">
+                            <div className="bg-gray-50 rounded p-2 border border-gray-200">
+                              <div className="text-xs font-medium text-gray-600 mb-0.5">First Message</div>
+                              <div className="text-xs text-gray-700 line-clamp-2">
+                                {conversation.firstMessage || "No content"}
+                              </div>
+                            </div>
+                            {conversation.lastMessage && conversation.lastMessage !== conversation.firstMessage && (
+                              <div className="bg-blue-50 rounded p-2 border border-blue-200">
+                                <div className="text-xs font-medium text-blue-600 mb-0.5">Latest Message</div>
+                                <div className="text-xs text-gray-700 line-clamp-2">
+                                  {conversation.lastMessage}
+                                </div>
+                              </div>
                             )}
                           </div>
                         </div>
-                        <div className="flex items-center space-x-3">
-                          <span className="text-xs bg-blue-50 border border-blue-200 text-blue-700 px-3 py-1.5 rounded-lg font-medium">
-                            {conversation.requestCount} turns
-                          </span>
-                          <div className="w-8 h-8 bg-gray-100 rounded-lg flex items-center justify-center">
-                            <ChevronRight className="w-4 h-4 text-gray-400" />
+                        <div className="flex-shrink-0 text-right">
+                          <div className="text-xs text-gray-500">
+                            {new Date(conversation.startTime).toLocaleDateString()}
+                          </div>
+                          <div className="text-xs text-gray-400">
+                            {new Date(conversation.startTime).toLocaleTimeString()}
                           </div>
                         </div>
-                      </div>
-                      <div className="space-y-2">
-                        <div className="text-gray-600 text-sm bg-blue-50 rounded-lg p-3 border border-blue-200">
-                          <strong>First:</strong> {conversation.firstMessage.substring(0, 200) || "No content"}{conversation.firstMessage.length > 200 && "..."}
-                        </div>
-                        {conversation.lastMessage && conversation.lastMessage !== conversation.firstMessage && (
-                          <div className="text-gray-600 text-sm bg-gray-50 rounded-lg p-3 border border-gray-200">
-                            <strong>Latest:</strong> {conversation.lastMessage.substring(0, 200)}{conversation.lastMessage.length > 200 && "..."}
-                          </div>
-                        )}
                       </div>
                     </div>
                   ))}
                   {hasMoreConversations && (
-                    <div className="p-4 text-center">
+                    <div className="p-3 text-center border-t border-gray-100">
                       <button
-                        onClick={() => loadConversations(modelFilter, true)}
+                        onClick={() => loadConversations(true)}
                         disabled={isFetching}
-                        className="px-4 py-2 text-sm font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:bg-blue-300 transition-colors"
+                        className="px-3 py-1.5 text-xs font-medium text-gray-700 bg-gray-100 rounded hover:bg-gray-200 disabled:opacity-50 transition-colors"
                       >
                         {isFetching ? "Loading..." : "Load More"}
                       </button>
