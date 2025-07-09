@@ -73,20 +73,6 @@ func (s *sqliteStorageService) SaveRequest(request *model.RequestLog) (string, e
 		return "", fmt.Errorf("failed to marshal body: %w", err)
 	}
 
-	// Model should already be set by the handler
-	modelName := request.Model
-	if modelName == "" {
-		// Defensive fallback: try to extract from body if somehow not set
-		if body, ok := request.Body.(map[string]interface{}); ok {
-			if model, ok := body["model"].(string); ok {
-				modelName = model
-				request.Model = model
-			}
-		}
-	}
-
-	log.Printf("🔧 Saving request with model: '%s' (ID: %s)", modelName, request.RequestID)
-
 	query := `
 		INSERT INTO requests (id, timestamp, method, endpoint, headers, body, user_agent, content_type, model)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -101,7 +87,7 @@ func (s *sqliteStorageService) SaveRequest(request *model.RequestLog) (string, e
 		string(bodyJSON),
 		request.UserAgent,
 		request.ContentType,
-		modelName,
+		request.Model,
 	)
 
 	if err != nil {

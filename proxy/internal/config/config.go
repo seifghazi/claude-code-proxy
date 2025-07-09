@@ -48,9 +48,9 @@ func Load() (*Config, error) {
 	cfg := &Config{
 		Server: ServerConfig{
 			Port:         getEnv("PORT", "3001"),
-			ReadTimeout:  getDuration("READ_TIMEOUT", 500*time.Second),
-			WriteTimeout: getDuration("WRITE_TIMEOUT", 500*time.Second),
-			IdleTimeout:  getDuration("IDLE_TIMEOUT", 500*time.Second),
+			ReadTimeout:  getDuration("READ_TIMEOUT", 600*time.Second),  // Increased to 10 minutes
+			WriteTimeout: getDuration("WRITE_TIMEOUT", 600*time.Second), // Increased to 10 minutes
+			IdleTimeout:  getDuration("IDLE_TIMEOUT", 600*time.Second),  // Increased to 10 minutes
 		},
 		Anthropic: AnthropicConfig{
 			BaseURL:    getEnv("ANTHROPIC_FORWARD_URL", "https://api.anthropic.com"),

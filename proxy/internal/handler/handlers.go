@@ -40,80 +40,9 @@ func New(anthropicService service.AnthropicService, storageService service.Stora
 func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 	log.Println("🤖 Chat completion request received (OpenAI format)")
 
-	bodyBytes := getBodyBytes(r)
-	if bodyBytes == nil {
-		http.Error(w, "Error reading request body", http.StatusBadRequest)
-		return
-	}
-
-	var req model.ChatCompletionRequest
-	if err := json.Unmarshal(bodyBytes, &req); err != nil {
-		log.Printf("❌ Error parsing JSON: %v", err)
-		writeErrorResponse(w, "Invalid JSON", http.StatusBadRequest)
-		return
-	}
-
-	requestID := generateRequestID()
-	startTime := time.Now()
-
-	requestLog := &model.RequestLog{
-		RequestID:   requestID,
-		Timestamp:   time.Now().Format(time.RFC3339),
-		Method:      r.Method,
-		Endpoint:    "/v1/chat/completions",
-		Headers:     SanitizeHeaders(r.Header),
-		Body:        req,
-		Model:       req.Model,
-		UserAgent:   r.Header.Get("User-Agent"),
-		ContentType: r.Header.Get("Content-Type"),
-	}
-
-	if _, err := h.storageService.SaveRequest(requestLog); err != nil {
-		log.Printf("❌ Error saving request: %v", err)
-	}
-
-	response := &model.ChatCompletionResponse{
-		ID:      fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano()),
-		Object:  "chat.completion",
-		Created: time.Now().Unix(),
-		Model:   req.Model,
-		Choices: []model.Choice{
-			{
-				Index: 0,
-				Message: model.ChatMessage{
-					Role:    "assistant",
-					Content: "Hello! This is a test response from the refactored proxy server.",
-				},
-				FinishReason: "stop",
-			},
-		},
-		Usage: model.Usage{
-			PromptTokens:     10,
-			CompletionTokens: 20,
-			TotalTokens:      30,
-		},
-	}
-
-	if req.Model == "" {
-		response.Model = "claude-3-sonnet"
-	}
-
-	responseLog := &model.ResponseLog{
-		StatusCode:   http.StatusOK,
-		Headers:      SanitizeHeaders(w.Header()),
-		Body:         response,
-		ResponseTime: time.Since(startTime).Milliseconds(),
-		IsStreaming:  false,
-	}
-
-	// The requestLog object has the conversation details.
-	// We need to set the response on it and then save the update.
-	requestLog.Response = responseLog
-	if err := h.storageService.UpdateRequestWithResponse(requestLog); err != nil {
-		log.Printf("❌ Error updating request with response: %v", err)
-	}
-
-	writeJSONResponse(w, response)
+	// This endpoint is for compatibility but we're an Anthropic proxy
+	// Return a helpful error message
+	writeErrorResponse(w, "This is an Anthropic proxy. Please use the /v1/messages endpoint instead of /v1/chat/completions", http.StatusBadRequest)
 }
 
 func (h *Handler) Messages(w http.ResponseWriter, r *http.Request) {
@@ -129,18 +58,6 @@ func (h *Handler) Messages(w http.ResponseWriter, r *http.Request) {
 	if err := json.Unmarshal(bodyBytes, &req); err != nil {
 		log.Printf("❌ Error parsing JSON: %v", err)
 		writeErrorResponse(w, "Invalid JSON", http.StatusBadRequest)
-		return
-	}
-
-	// Extract API key from incoming request headers
-	apiKey := r.Header.Get("x-api-key")
-	if apiKey == "" {
-		// Also check for X-Api-Key (capitalized version)
-		apiKey = r.Header.Get("X-Api-Key")
-	}
-	if apiKey == "" {
-		log.Println("❌ No API key provided in request headers")
-		writeErrorResponse(w, "API key required in x-api-key header", http.StatusUnauthorized)
 		return
 	}
 
@@ -165,7 +82,7 @@ func (h *Handler) Messages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Forward the request to Anthropic
-	resp, err := h.anthropicService.ForwardRequest(r.Context(), &req, apiKey)
+	resp, err := h.anthropicService.ForwardRequest(r.Context(), r)
 	if err != nil {
 		log.Printf("❌ Error forwarding to Anthropic API: %v", err)
 		writeErrorResponse(w, "Failed to forward request", http.StatusInternalServerError)
@@ -354,6 +271,10 @@ func (h *Handler) handleStreamingResponse(w http.ResponseWriter, resp *http.Resp
 	var fullResponseText strings.Builder
 	var toolCalls []model.ContentBlock
 	var streamingChunks []string
+	var finalUsage *model.AnthropicUsage
+	var messageID string
+	var modelName string
+	var stopReason string
 
 	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() {
@@ -369,10 +290,72 @@ func (h *Handler) handleStreamingResponse(w http.ResponseWriter, resp *http.Resp
 		}
 
 		jsonData := strings.TrimPrefix(line, "data: ")
-		var event model.StreamingEvent
-		if err := json.Unmarshal([]byte(jsonData), &event); err != nil {
+
+		// Parse as generic JSON first to capture usage data
+		var genericEvent map[string]interface{}
+		if err := json.Unmarshal([]byte(jsonData), &genericEvent); err != nil {
 			log.Printf("⚠️ Error unmarshalling streaming event: %v", err)
 			continue
+		}
+
+		// Capture usage data and metadata from message_start event
+		if eventType, ok := genericEvent["type"].(string); ok && eventType == "message_start" {
+			if message, ok := genericEvent["message"].(map[string]interface{}); ok {
+				// Capture message metadata
+				if id, ok := message["id"].(string); ok {
+					messageID = id
+				}
+				if model, ok := message["model"].(string); ok {
+					modelName = model
+				}
+				if reason, ok := message["stop_reason"].(string); ok {
+					stopReason = reason
+				}
+
+				// Capture initial usage data from message_start
+				if usage, ok := message["usage"].(map[string]interface{}); ok {
+					finalUsage = &model.AnthropicUsage{}
+					if inputTokens, ok := usage["input_tokens"].(float64); ok {
+						finalUsage.InputTokens = int(inputTokens)
+					}
+					if outputTokens, ok := usage["output_tokens"].(float64); ok {
+						finalUsage.OutputTokens = int(outputTokens)
+					}
+					if cacheCreation, ok := usage["cache_creation_input_tokens"].(float64); ok {
+						finalUsage.CacheCreationInputTokens = int(cacheCreation)
+					}
+					if cacheRead, ok := usage["cache_read_input_tokens"].(float64); ok {
+						finalUsage.CacheReadInputTokens = int(cacheRead)
+					}
+					if tier, ok := usage["service_tier"].(string); ok {
+						finalUsage.ServiceTier = tier
+					}
+					log.Printf("📊 Captured initial usage from message_start: %+v", finalUsage)
+				} else {
+					log.Printf("⚠️ No usage data found in message_start event")
+				}
+			}
+		}
+
+		// Update output tokens from message_delta event
+		if eventType, ok := genericEvent["type"].(string); ok && eventType == "message_delta" {
+			// Usage is at top level for message_delta events
+			if usage, ok := genericEvent["usage"].(map[string]interface{}); ok {
+				if finalUsage != nil {
+					if outputTokens, ok := usage["output_tokens"].(float64); ok {
+						finalUsage.OutputTokens = int(outputTokens)
+						log.Printf("📊 Updated output tokens from message_delta: %d", int(outputTokens))
+					}
+				} else {
+					log.Printf("⚠️ finalUsage is nil when trying to update from message_delta usage")
+				}
+			}
+		}
+
+		// Parse as structured event for content processing
+		var event model.StreamingEvent
+		if err := json.Unmarshal([]byte(jsonData), &event); err != nil {
+			continue // Skip if structured parsing fails, but we already got the usage data above
 		}
 
 		switch event.Type {
@@ -391,8 +374,7 @@ func (h *Handler) handleStreamingResponse(w http.ResponseWriter, resp *http.Resp
 				toolCalls = append(toolCalls, *event.ContentBlock)
 			}
 		case "message_stop":
-			// End of stream
-			break
+			// End of stream - scanner will exit on its own
 		}
 	}
 
@@ -405,19 +387,41 @@ func (h *Handler) handleStreamingResponse(w http.ResponseWriter, resp *http.Resp
 		CompletedAt:     time.Now().Format(time.RFC3339),
 	}
 
-	// Create a structured body for the log
-	var responseBody model.AnthropicMessage
-	responseBody.Role = "assistant"
-	var contentBlocks []model.ContentBlock
+	// Create a structured response body that matches Anthropic's format
+	var contentBlocks []model.AnthropicContentBlock
 	if fullResponseText.Len() > 0 {
-		contentBlocks = append(contentBlocks, model.ContentBlock{
+		contentBlocks = append(contentBlocks, model.AnthropicContentBlock{
 			Type: "text",
 			Text: fullResponseText.String(),
 		})
 	}
-	contentBlocks = append(contentBlocks, toolCalls...)
-	responseBody.Content = contentBlocks
-	responseLog.Body = responseBody
+
+	// Create an AnthropicResponse-like structure for consistency
+	responseBody := map[string]interface{}{
+		"content":     contentBlocks,
+		"id":          messageID,
+		"model":       modelName,
+		"role":        "assistant",
+		"stop_reason": stopReason,
+		"type":        "message",
+	}
+
+	// Add usage data if we captured it
+	if finalUsage != nil {
+		responseBody["usage"] = finalUsage
+		log.Printf("📊 Final usage data being stored: %+v", finalUsage)
+	} else {
+		log.Printf("⚠️ No usage data captured for streaming response - finalUsage is nil")
+	}
+
+	// Marshal to JSON for storage
+	responseBodyBytes, err := json.Marshal(responseBody)
+	if err != nil {
+		log.Printf("❌ Error marshaling streaming response body: %v", err)
+		responseBodyBytes = []byte("{}")
+	}
+
+	responseLog.Body = json.RawMessage(responseBodyBytes)
 
 	requestLog.Response = responseLog
 	if err := h.storageService.UpdateRequestWithResponse(requestLog); err != nil {
@@ -432,6 +436,10 @@ func (h *Handler) handleStreamingResponse(w http.ResponseWriter, resp *http.Resp
 }
 
 func (h *Handler) handleNonStreamingResponse(w http.ResponseWriter, resp *http.Response, requestLog *model.RequestLog, startTime time.Time) {
+	// Log response headers for debugging
+	log.Printf("📋 Response headers: Content-Encoding=%s, Content-Type=%s, Status=%d",
+		resp.Header.Get("Content-Encoding"), resp.Header.Get("Content-Type"), resp.StatusCode)
+
 	responseBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		log.Printf("❌ Error reading Anthropic response: %v", err)
@@ -439,21 +447,35 @@ func (h *Handler) handleNonStreamingResponse(w http.ResponseWriter, resp *http.R
 		return
 	}
 
+	// Log first few bytes to help debug compression issues
+	if len(responseBytes) > 0 {
+		log.Printf("📊 Response body starts with: %x (first 10 bytes)", responseBytes[:min(10, len(responseBytes))])
+	}
+
 	responseLog := &model.ResponseLog{
 		StatusCode:   resp.StatusCode,
 		Headers:      SanitizeHeaders(resp.Header),
-		BodyText:     string(responseBytes),
 		ResponseTime: time.Since(startTime).Milliseconds(),
 		IsStreaming:  false,
 		CompletedAt:  time.Now().Format(time.RFC3339),
 	}
 
-	// Try to parse as JSON for structured logging
-	if resp.Header.Get("Content-Type") == "application/json" {
-		var jsonBody interface{}
-		if json.Unmarshal(responseBytes, &jsonBody) == nil {
-			responseLog.Body = jsonBody
+	// Parse the response as AnthropicResponse for consistent structure
+	if resp.StatusCode == http.StatusOK {
+		var anthropicResp model.AnthropicResponse
+		if err := json.Unmarshal(responseBytes, &anthropicResp); err == nil {
+			// Successfully parsed - store the structured response
+			responseLog.Body = json.RawMessage(responseBytes)
+			log.Printf("✅ Successfully parsed Anthropic response")
+		} else {
+			// If parsing fails, store as text but log the error
+			log.Printf("⚠️ Failed to parse Anthropic response: %v", err)
+			log.Printf("📄 Response body (first 500 chars): %s", string(responseBytes[:min(500, len(responseBytes))]))
+			responseLog.BodyText = string(responseBytes)
 		}
+	} else {
+		// For error responses, store as text
+		responseLog.BodyText = string(responseBytes)
 	}
 
 	requestLog.Response = responseLog
@@ -472,6 +494,14 @@ func (h *Handler) handleNonStreamingResponse(w http.ResponseWriter, resp *http.R
 	log.Println("✅ Successfully forwarded request to Anthropic API")
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(responseBytes)
+}
+
+// Helper function to get minimum of two integers
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func generateRequestID() string {
