@@ -30,7 +30,7 @@ Claude Code Proxy serves two main purposes:
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/yourusername/claude-code-monitor.git
+   git clone https://github.com/seifghazi/claude-code-proxy.git
    cd claude-code-monitor
    ```
 
