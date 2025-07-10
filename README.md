@@ -24,7 +24,6 @@ Claude Code Proxy serves two main purposes:
 ### Prerequisites
 - Go 1.20+
 - Node.js 18+
-- Anthropic API key
 - Claude Code
 
 ### Installation
