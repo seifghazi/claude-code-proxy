@@ -30,8 +30,8 @@ Claude Code Proxy serves two main purposes:
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/yourusername/claude-code-monitor.git
-   cd claude-code-monitor
+   git clone https://github.com/seifghazi/claude-code-proxy.git
+   cd claude-code-proxy
    ```
 
 2. **Set up your environment variables**
@@ -113,7 +113,7 @@ See `.env.example` for all available options.
 ## Project Structure
 
 ```
-claude-code-monitor/
+claude-code-proxy/
 ├── proxy/                  # Go proxy server
 │   ├── cmd/               # Application entry points
 │   ├── internal/          # Internal packages
