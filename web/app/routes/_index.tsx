@@ -61,6 +61,15 @@ interface Request {
       type: string;
       cache_control?: { type: string };
     }>;
+    tools?: Array<{
+      name: string;
+      description: string;
+      input_schema?: {
+        type: string;
+        properties?: Record<string, any>;
+        required?: string[];
+      };
+    }>;
     max_tokens?: number;
     temperature?: number;
     stream?: boolean;
@@ -231,13 +240,16 @@ export default function Index() {
     }
   };
 
-  const loadConversations = async (loadMore = false) => {
+  const loadConversations = async (modelFilter: string = "all", loadMore = false) => {
     setIsFetching(true);
     const pageToFetch = loadMore ? conversationsCurrentPage + 1 : 1;
     try {
       const url = new URL('/api/conversations', window.location.origin);
       url.searchParams.append("page", pageToFetch.toString());
       url.searchParams.append("limit", itemsPerPage.toString());
+      if (modelFilter !== "all") {
+        url.searchParams.append("model", modelFilter);
+      }
       
       const response = await fetch(url.toString());
       if (!response.ok) {
@@ -500,7 +512,7 @@ export default function Index() {
     if (viewMode === 'requests') {
       loadRequests(modelFilter);
     } else {
-      loadConversations();
+      loadConversations(modelFilter);
     }
   }, [viewMode, modelFilter]);
 
@@ -807,7 +819,7 @@ export default function Index() {
                   {hasMoreConversations && (
                     <div className="p-3 text-center border-t border-gray-100">
                       <button
-                        onClick={() => loadConversations(true)}
+                        onClick={() => loadConversations(modelFilter, true)}
                         disabled={isFetching}
                         className="px-3 py-1.5 text-xs font-medium text-gray-700 bg-gray-100 rounded hover:bg-gray-200 disabled:opacity-50 transition-colors"
                       >

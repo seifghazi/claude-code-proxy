@@ -17,7 +17,8 @@ import {
   Wifi,
   Calendar,
   List,
-  FileText
+  FileText,
+  Wrench
 } from 'lucide-react';
 import { MessageContent } from './MessageContent';
 import { formatJSON } from '../utils/formatters';
@@ -38,6 +39,15 @@ interface Request {
       text: string;
       type: string;
       cache_control?: { type: string };
+    }>;
+    tools?: Array<{
+      name: string;
+      description: string;
+      input_schema?: {
+        type: string;
+        properties?: Record<string, any>;
+        required?: string[];
+      };
     }>;
     max_tokens?: number;
     temperature?: number;
@@ -236,6 +246,36 @@ export default function RequestDetailContent({ request, onGrade }: RequestDetail
                         <MessageContent content={{ type: 'text', text: sys.text }} />
                       </div>
                     </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Tools */}
+          {request.body.tools && request.body.tools.length > 0 && (
+            <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+              <div 
+                className="bg-gray-50 px-6 py-4 border-b border-gray-200 cursor-pointer"
+                onClick={() => toggleSection('tools')}
+              >
+                <div className="flex items-center justify-between">
+                  <h4 className="text-lg font-semibold text-gray-900 flex items-center space-x-3">
+                    <Wrench className="w-5 h-5 text-indigo-600" />
+                    <span>Available Tools</span>
+                    <span className="text-xs bg-indigo-50 text-indigo-700 px-2 py-1 rounded-full border border-indigo-200">
+                      {request.body.tools.length} tools
+                    </span>
+                  </h4>
+                  <ChevronDown className={`w-5 h-5 text-gray-500 transition-transform ${
+                    expandedSections.tools ? 'rotate-180' : ''
+                  }`} />
+                </div>
+              </div>
+              {expandedSections.tools && (
+                <div className="p-6 space-y-4">
+                  {request.body.tools.map((tool, index) => (
+                    <ToolCard key={index} tool={tool} index={index} />
                   ))}
                 </div>
               )}
@@ -784,6 +824,110 @@ function ResponseDetails({ response }: { response: NonNullable<Request['response
           })()}
         </div>
       )}
+    </div>
+  );
+}
+
+// Tool Card Component
+function ToolCard({ tool, index }: { tool: any; index: number }) {
+  const [expanded, setExpanded] = useState(false);
+  const [copiedSchema, setCopiedSchema] = useState(false);
+
+  const handleCopySchema = async () => {
+    try {
+      await navigator.clipboard.writeText(formatJSON(tool.input_schema));
+      setCopiedSchema(true);
+      setTimeout(() => setCopiedSchema(false), 2000);
+    } catch (error) {
+      console.error('Failed to copy schema:', error);
+    }
+  };
+
+  // Parse description to identify code blocks and format them
+  const formatDescription = (description: string) => {
+    // Split by code blocks (text between backticks)
+    const parts = description.split(/(`[^`]+`)/g);
+    
+    return parts.map((part, i) => {
+      if (part.startsWith('`') && part.endsWith('`')) {
+        // Code inline
+        const code = part.slice(1, -1);
+        return (
+          <code key={i} className="bg-gray-100 text-gray-800 px-1.5 py-0.5 rounded text-xs font-mono">
+            {code}
+          </code>
+        );
+      }
+      
+      // Return non-code parts as plain text
+      return <span key={i}>{part}</span>;
+    });
+  };
+
+  const isLongDescription = tool.description.length > 300;
+  const displayDescription = expanded ? tool.description : tool.description.slice(0, 300);
+
+  return (
+    <div className="bg-gray-50 border border-gray-200 rounded-xl overflow-hidden">
+      <div className="p-5">
+        <div className="flex items-start justify-between mb-4">
+          <div className="flex items-center space-x-3">
+            <div className="w-10 h-10 bg-white rounded-lg flex items-center justify-center border border-gray-200 shadow-sm">
+              <Wrench className="w-5 h-5 text-gray-600" />
+            </div>
+            <div>
+              <h5 className="text-lg font-bold text-gray-900">{tool.name}</h5>
+              <span className="text-xs text-gray-500">Tool #{index + 1}</span>
+            </div>
+          </div>
+        </div>
+        
+        <div className="prose prose-sm max-w-none">
+          <div className="text-sm text-gray-700 leading-relaxed space-y-2">
+            <div className="whitespace-pre-wrap">
+              {formatDescription(displayDescription)}
+              {isLongDescription && !expanded && '...'}
+            </div>
+            {isLongDescription && (
+              <button
+                onClick={() => setExpanded(!expanded)}
+                className="text-blue-600 hover:text-blue-700 text-xs font-medium mt-2"
+              >
+                {expanded ? 'Show less' : 'Show more'}
+              </button>
+            )}
+          </div>
+        </div>
+        
+        {tool.input_schema && (
+          <div className="mt-4">
+            <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+              <div className="bg-gray-50 px-4 py-2 border-b border-gray-200 flex items-center justify-between">
+                <span className="text-xs font-semibold text-gray-700 flex items-center space-x-2">
+                  <Settings className="w-3.5 h-3.5" />
+                  <span>Input Schema</span>
+                </span>
+                <button
+                  onClick={handleCopySchema}
+                  className="p-1 text-gray-500 hover:text-gray-700 transition-colors"
+                  title="Copy schema"
+                >
+                  {copiedSchema ? (
+                    <Check className="w-3.5 h-3.5 text-green-600" />
+                  ) : (
+                    <Copy className="w-3.5 h-3.5" />
+                  )}
+                </button>
+              </div>
+              <div className="p-3">
+                <pre className="text-xs text-gray-700 overflow-x-auto font-mono">
+                  {formatJSON(tool.input_schema)}
+                </pre>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
