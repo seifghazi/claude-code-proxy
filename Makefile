@@ -1,4 +1,4 @@
-.PHONY: all build run clean install dev
+.PHONY: all build run clean install dev test test-proxy test-coverage
 
 # Default target
 all: install build
@@ -42,6 +42,19 @@ clean:
 	rm -rf web/.cache/
 	rm -f requests.db
 	rm -rf requests/
+
+# Testing
+test: test-proxy
+
+test-proxy:
+	@echo "🧪 Running proxy tests..."
+	cd proxy && go test -v ./...
+
+test-coverage:
+	@echo "📊 Running tests with coverage..."
+	cd proxy && go test -v -coverprofile=coverage.out ./...
+	cd proxy && go tool cover -html=coverage.out -o coverage.html
+	@echo "📊 Coverage report generated: proxy/coverage.html"
 
 # Database operations
 db-reset:

@@ -25,17 +25,19 @@ type CriteriaScore struct {
 }
 
 type RequestLog struct {
-	RequestID   string              `json:"requestId"`
-	Timestamp   string              `json:"timestamp"`
-	Method      string              `json:"method"`
-	Endpoint    string              `json:"endpoint"`
-	Headers     map[string][]string `json:"headers"`
-	Body        interface{}         `json:"body"`
-	Model       string              `json:"model,omitempty"`
-	UserAgent   string              `json:"userAgent"`
-	ContentType string              `json:"contentType"`
-	PromptGrade *PromptGrade        `json:"promptGrade,omitempty"`
-	Response    *ResponseLog        `json:"response,omitempty"`
+	RequestID     string              `json:"requestId"`
+	Timestamp     string              `json:"timestamp"`
+	Method        string              `json:"method"`
+	Endpoint      string              `json:"endpoint"`
+	Headers       map[string][]string `json:"headers"`
+	Body          interface{}         `json:"body"`
+	Model         string              `json:"model,omitempty"`
+	OriginalModel string              `json:"originalModel,omitempty"`
+	RoutedModel   string              `json:"routedModel,omitempty"`
+	UserAgent     string              `json:"userAgent"`
+	ContentType   string              `json:"contentType"`
+	PromptGrade   *PromptGrade        `json:"promptGrade,omitempty"`
+	Response      *ResponseLog        `json:"response,omitempty"`
 }
 
 type ResponseLog struct {

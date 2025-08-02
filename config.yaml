@@ -1,0 +1,37 @@
+# LLM Proxy Configuration
+# This file configures the LLM proxy server and its integrations
+
+# Server configuration
+server:
+  port: 3001
+  timeouts:
+    read: 10m    # Read timeout (default: 10 minutes)
+    write: 10m   # Write timeout (default: 10 minutes)
+    idle: 10m    # Idle timeout (default: 10 minutes)
+
+# Provider configurations
+providers:
+  # Anthropic Claude configuration
+  anthropic:
+    base_url: "https://api.anthropic.com"
+    version: "2023-06-01"
+    max_retries: 3
+  
+  # OpenAI configuration
+  openai:
+    # API key can be set here or via OPENAI_API_KEY environment variable
+    # api_key: "your-api-key-here"
+    base_url: "https://proxy-shopify-ai.local.shop.dev"
+
+# Storage configuration
+storage:
+  # SQLite database path for storing request history
+  db_path: "requests.db"
+
+# Subagent mappings
+# Maps subagent types to specific models
+subagents:
+  mappings:
+    streaming-systems-engineer: "gpt-4o"
+    # Add more subagent mappings as needed
+    # example-agent: "gpt-4o"

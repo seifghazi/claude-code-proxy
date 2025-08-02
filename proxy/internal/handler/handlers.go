@@ -25,15 +25,19 @@ type Handler struct {
 	anthropicService    service.AnthropicService
 	storageService      service.StorageService
 	conversationService service.ConversationService
+	modelRouter         *service.ModelRouter
+	logger              *log.Logger
 }
 
-func New(anthropicService service.AnthropicService, storageService service.StorageService, logger *log.Logger) *Handler {
+func New(anthropicService service.AnthropicService, storageService service.StorageService, logger *log.Logger, modelRouter *service.ModelRouter) *Handler {
 	conversationService := service.NewConversationService()
 
 	return &Handler{
 		anthropicService:    anthropicService,
 		storageService:      storageService,
 		conversationService: conversationService,
+		modelRouter:         modelRouter,
+		logger:              logger,
 	}
 }
 
@@ -81,10 +85,22 @@ func (h *Handler) Messages(w http.ResponseWriter, r *http.Request) {
 		log.Printf("❌ Error saving request: %v", err)
 	}
 
-	// Forward the request to Anthropic
-	resp, err := h.anthropicService.ForwardRequest(r.Context(), r)
+	// Use model router to determine provider and route the request
+	provider, originalModel, err := h.modelRouter.RouteRequest(&req)
 	if err != nil {
-		log.Printf("❌ Error forwarding to Anthropic API: %v", err)
+		log.Printf("❌ Error routing request: %v", err)
+		writeErrorResponse(w, "Failed to route request", http.StatusInternalServerError)
+		return
+	}
+
+	// Update request log with original model (for tracking)
+	requestLog.OriginalModel = originalModel
+	requestLog.RoutedModel = req.Model
+
+	// Forward the request to the selected provider
+	resp, err := provider.ForwardRequest(r.Context(), r)
+	if err != nil {
+		log.Printf("❌ Error forwarding to %s API: %v", provider.Name(), err)
 		writeErrorResponse(w, "Failed to forward request", http.StatusInternalServerError)
 		return
 	}
