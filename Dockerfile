@@ -6,8 +6,8 @@ FROM golang:1.21-alpine AS go-builder
 
 WORKDIR /app
 
-# Install build dependencies
-RUN apk add --no-cache git
+# Install build dependencies including gcc for CGO
+RUN apk add --no-cache git gcc musl-dev sqlite-dev
 
 # Copy Go modules
 COPY proxy/go.mod proxy/go.sum ./proxy/
@@ -16,7 +16,8 @@ RUN go mod download
 
 # Copy Go source code
 COPY proxy/ ./
-RUN go build -o /app/bin/proxy cmd/proxy/main.go
+# Build with CGO enabled for SQLite support
+RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o /app/bin/proxy cmd/proxy/main.go
 
 # Stage 2: Build Node.js Frontend
 FROM node:20-alpine AS node-builder
@@ -26,19 +27,22 @@ WORKDIR /app
 # Copy package files
 COPY web/package*.json ./web/
 WORKDIR /app/web
-RUN npm ci --only=production
+RUN npm ci
 
 # Copy web source code and build
 COPY web/ ./
 RUN npm run build
+
+# Clean up dev dependencies after build
+RUN npm ci --only=production && npm cache clean --force
 
 # Stage 3: Production Runtime
 FROM node:20-alpine
 
 WORKDIR /app
 
-# Install process manager for running multiple services
-RUN npm install -g pm2
+# Install runtime dependencies
+RUN apk add --no-cache sqlite wget
 
 # Create app user for security
 RUN addgroup -g 1001 -S appgroup && \
@@ -79,7 +83,7 @@ USER appuser
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:${PORT}/health || exit 1
+    CMD wget -qO- http://localhost:3001/health > /dev/null || exit 1
 
 # Start both services
 CMD ["./docker-entrypoint.sh"]
