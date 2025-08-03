@@ -28,7 +28,8 @@ import {
   Copy,
   Check,
   Lightbulb,
-  Loader2
+  Loader2,
+  ArrowLeftRight
 } from "lucide-react";
 
 import RequestDetailContent from "../components/RequestDetailContent";
@@ -50,6 +51,8 @@ interface Request {
   method: string;
   endpoint: string;
   headers: Record<string, string[]>;
+  originalModel?: string;
+  routedModel?: string;
   body?: {
     model?: string;
     messages?: Array<{
@@ -363,12 +366,21 @@ export default function Index() {
       parts.push(`⏱️ ${seconds}s`);
     }
     
-    // Add model if available
-    if (request.body?.model) {
-      const modelShort = request.body.model.includes('opus') ? 'Opus' :
-                         request.body.model.includes('sonnet') ? 'Sonnet' :
-                         request.body.model.includes('haiku') ? 'Haiku' : 'Model';
+    // Add model if available (use routed model if different from original)
+    const model = request.routedModel || request.body?.model;
+    if (model) {
+      const modelShort = model.includes('opus') ? 'Opus' :
+                         model.includes('sonnet') ? 'Sonnet' :
+                         model.includes('haiku') ? 'Haiku' : 
+                         model.includes('gpt-4o') ? 'gpt-4o' :
+                         model.includes('o3') ? 'o3' :
+                         model.includes('o3-mini') ? 'o3-mini' : 'Model';
       parts.push(`🤖 ${modelShort}`);
+      
+      // Show routing info if model was routed
+      if (request.routedModel && request.originalModel && request.routedModel !== request.originalModel) {
+        parts.push(`→ routed`);
+      }
     }
     
     return parts.length > 0 ? parts.join(' • ') : '📡 API request';
@@ -671,13 +683,25 @@ export default function Index() {
                           {/* Model and Status */}
                           <div className="flex items-center space-x-3 mb-1">
                             <h3 className="text-sm font-medium">
-                              {request.body?.model ? (
-                                request.body.model.includes('opus') ? <span className="text-purple-600 font-semibold">Opus</span> :
-                                request.body.model.includes('sonnet') ? <span className="text-indigo-600 font-semibold">Sonnet</span> :
-                                request.body.model.includes('haiku') ? <span className="text-teal-600 font-semibold">Haiku</span> :
-                                <span className="text-gray-900">{request.body.model.split('-')[0]}</span>
+                              {request.routedModel || request.body?.model ? (
+                                // Use routedModel if available, otherwise fall back to body.model
+                                (() => {
+                                  const model = request.routedModel || request.body?.model || '';
+                                  if (model.includes('opus')) return <span className="text-purple-600 font-semibold">Opus</span>;
+                                  if (model.includes('sonnet')) return <span className="text-indigo-600 font-semibold">Sonnet</span>;
+                                  if (model.includes('haiku')) return <span className="text-teal-600 font-semibold">Haiku</span>;
+                                  if (model.includes('gpt-4o')) return <span className="text-green-600 font-semibold">GPT-4o</span>;
+                                  if (model.includes('gpt')) return <span className="text-green-600 font-semibold">GPT</span>;
+                                  return <span className="text-gray-900">{model.split('-')[0]}</span>;
+                                })()
                               ) : <span className="text-gray-900">API</span>}
                             </h3>
+                            {request.routedModel && request.routedModel !== request.originalModel && (
+                              <span className="text-xs px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded font-medium flex items-center space-x-1">
+                                <ArrowLeftRight className="w-3 h-3" />
+                                <span>routed</span>
+                              </span>
+                            )}
                             {request.response?.statusCode && (
                               <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${
                                 request.response.statusCode >= 200 && request.response.statusCode < 300 
@@ -698,7 +722,7 @@ export default function Index() {
                           
                           {/* Endpoint */}
                           <div className="text-xs text-gray-600 font-mono mb-1">
-                            {request.endpoint}
+                            {request.routedModel && request.routedModel.startsWith('gpt-') ? '/v1/chat/completions' : request.endpoint}
                           </div>
                           
                           {/* Metrics Row */}

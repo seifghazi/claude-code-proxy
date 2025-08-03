@@ -13,7 +13,7 @@ func TestLoad(t *testing.T) {
 	originalPort := os.Getenv("PORT")
 	originalAnthropicURL := os.Getenv("ANTHROPIC_FORWARD_URL")
 	originalOpenAIKey := os.Getenv("OPENAI_API_KEY")
-	
+
 	// Restore after test
 	defer func() {
 		os.Setenv("CONFIG_PATH", originalConfigPath)
@@ -82,7 +82,7 @@ subagents:
 		// Clear environment variables
 		os.Unsetenv("CONFIG_PATH")
 		os.Unsetenv("PORT")
-		
+
 		// Create empty config directory
 		tempDir := t.TempDir()
 		os.Setenv("CONFIG_PATH", filepath.Join(tempDir, "nonexistent.yaml"))
@@ -188,7 +188,7 @@ func TestConfig_ParseTimeouts(t *testing.T) {
 		{"Valid minutes", "5m", 5, false},
 		{"Valid seconds", "30s", 0, false}, // Will be 30 seconds, not minutes
 		{"Valid hours", "2h", 120, false},
-		{"Empty string", "", 10, false}, // Should use default
+		{"Empty string", "", 10, false},          // Should use default
 		{"Invalid format", "invalid", 10, false}, // Should use default
 	}
 

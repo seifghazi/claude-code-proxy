@@ -16,8 +16,6 @@ import (
 func Logging(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		log.Printf("%s - %s %s", start.Format(time.RFC3339), r.Method, r.URL.Path)
-		log.Printf("Headers: %s", formatHeaders(r.Header))
 
 		var bodyBytes []byte
 		if r.Body != nil {
@@ -34,12 +32,6 @@ func Logging(next http.Handler) http.Handler {
 
 		ctx := context.WithValue(r.Context(), model.BodyBytesKey, bodyBytes)
 		r = r.WithContext(ctx)
-
-		log.Printf("Body length: %d bytes", len(bodyBytes))
-		if len(bodyBytes) > 0 {
-			logRequestBody(bodyBytes)
-		}
-		log.Println("---")
 
 		wrapped := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
 		next.ServeHTTP(wrapped, r)
@@ -75,17 +67,6 @@ func sanitizeHeaderValue(key string, values []string) []string {
 		}
 	}
 	return values
-}
-
-func logRequestBody(bodyBytes []byte) {
-	var bodyJSON interface{}
-	if err := json.Unmarshal(bodyBytes, &bodyJSON); err == nil {
-		bodyStr, _ := json.MarshalIndent(bodyJSON, "", "  ")
-		log.Printf("Body: %s", string(bodyStr))
-	} else {
-		log.Printf("❌ Failed to parse body as JSON: %v", err)
-		log.Printf("Raw body: %s", string(bodyBytes))
-	}
 }
 
 type responseWriter struct {

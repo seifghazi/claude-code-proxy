@@ -50,6 +50,8 @@ func (s *sqliteStorageService) createTables() error {
 		prompt_grade TEXT,
 		response TEXT,
 		model TEXT,
+		original_model TEXT,
+		routed_model TEXT,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
 
@@ -74,8 +76,8 @@ func (s *sqliteStorageService) SaveRequest(request *model.RequestLog) (string, e
 	}
 
 	query := `
-		INSERT INTO requests (id, timestamp, method, endpoint, headers, body, user_agent, content_type, model)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO requests (id, timestamp, method, endpoint, headers, body, user_agent, content_type, model, original_model, routed_model)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
 	_, err = s.db.Exec(query,
@@ -88,6 +90,8 @@ func (s *sqliteStorageService) SaveRequest(request *model.RequestLog) (string, e
 		request.UserAgent,
 		request.ContentType,
 		request.Model,
+		request.OriginalModel,
+		request.RoutedModel,
 	)
 
 	if err != nil {
@@ -108,7 +112,7 @@ func (s *sqliteStorageService) GetRequests(page, limit int) ([]model.RequestLog,
 	// Get paginated results
 	offset := (page - 1) * limit
 	query := `
-		SELECT id, timestamp, method, endpoint, headers, body, model, user_agent, content_type, prompt_grade, response
+		SELECT id, timestamp, method, endpoint, headers, body, model, user_agent, content_type, prompt_grade, response, original_model, routed_model
 		FROM requests
 		ORDER BY timestamp DESC
 		LIMIT ? OFFSET ?
@@ -138,6 +142,8 @@ func (s *sqliteStorageService) GetRequests(page, limit int) ([]model.RequestLog,
 			&req.ContentType,
 			&promptGradeJSON,
 			&responseJSON,
+			&req.OriginalModel,
+			&req.RoutedModel,
 		)
 		if err != nil {
 			log.Printf("Error scanning row: %v", err)
@@ -228,7 +234,7 @@ func (s *sqliteStorageService) EnsureDirectoryExists() error {
 
 func (s *sqliteStorageService) GetRequestByShortID(shortID string) (*model.RequestLog, string, error) {
 	query := `
-		SELECT id, timestamp, method, endpoint, headers, body, model, user_agent, content_type, prompt_grade, response
+		SELECT id, timestamp, method, endpoint, headers, body, model, user_agent, content_type, prompt_grade, response, original_model, routed_model
 		FROM requests
 		WHERE id LIKE ?
 		ORDER BY timestamp DESC
@@ -251,6 +257,8 @@ func (s *sqliteStorageService) GetRequestByShortID(shortID string) (*model.Reque
 		&req.ContentType,
 		&promptGradeJSON,
 		&responseJSON,
+		&req.OriginalModel,
+		&req.RoutedModel,
 	)
 
 	if err == sql.ErrNoRows {
@@ -294,7 +302,7 @@ func (s *sqliteStorageService) GetConfig() *config.StorageConfig {
 
 func (s *sqliteStorageService) GetAllRequests(modelFilter string) ([]*model.RequestLog, error) {
 	query := `
-		SELECT id, timestamp, method, endpoint, headers, body, model, user_agent, content_type, prompt_grade, response
+		SELECT id, timestamp, method, endpoint, headers, body, model, user_agent, content_type, prompt_grade, response, original_model, routed_model
 		FROM requests
 	`
 	args := []interface{}{}
@@ -331,13 +339,15 @@ func (s *sqliteStorageService) GetAllRequests(modelFilter string) ([]*model.Requ
 			&req.ContentType,
 			&promptGradeJSON,
 			&responseJSON,
+			&req.OriginalModel,
+			&req.RoutedModel,
 		)
 		if err != nil {
 			log.Printf("Error scanning row: %v", err)
 			continue
 		}
 
-		log.Printf("🔍 Scanned request - ID: %s, Model: %s", req.RequestID, req.Model)
+		// log.Printf("🔍 Scanned request - ID: %s, Model: %s", req.RequestID, req.Model)
 
 		// Unmarshal JSON fields
 		if err := json.Unmarshal([]byte(headersJSON), &req.Headers); err != nil {

@@ -81,43 +81,93 @@ func Load() (*Config, error) {
 	// Start with default configuration
 	cfg := &Config{
 		Server: ServerConfig{
-			Port:         getEnv("PORT", "3001"),
-			ReadTimeout:  getDuration("READ_TIMEOUT", 600*time.Second),
-			WriteTimeout: getDuration("WRITE_TIMEOUT", 600*time.Second),
-			IdleTimeout:  getDuration("IDLE_TIMEOUT", 600*time.Second),
+			Port:         "3001",
+			ReadTimeout:  600 * time.Second,
+			WriteTimeout: 600 * time.Second,
+			IdleTimeout:  600 * time.Second,
 		},
 		Providers: ProvidersConfig{
 			Anthropic: AnthropicProviderConfig{
-				BaseURL:    getEnv("ANTHROPIC_FORWARD_URL", "https://api.anthropic.com"),
-				Version:    getEnv("ANTHROPIC_VERSION", "2023-06-01"),
-				MaxRetries: getInt("ANTHROPIC_MAX_RETRIES", 3),
+				BaseURL:    "https://api.anthropic.com",
+				Version:    "2023-06-01",
+				MaxRetries: 3,
 			},
 			OpenAI: OpenAIProviderConfig{
-				BaseURL: getEnv("OPENAI_BASE_URL", "https://api.openai.com"),
-				APIKey:  getEnv("OPENAI_API_KEY", ""),
+				BaseURL: "https://api.openai.com",
+				APIKey:  "",
 			},
 		},
 		Storage: StorageConfig{
-			DBPath: getEnv("DB_PATH", "requests.db"),
+			DBPath: "requests.db",
 		},
 		Subagents: SubagentsConfig{
 			Mappings: make(map[string]string),
 		},
-		// Legacy field for backward compatibility
-		Anthropic: AnthropicConfig{
-			BaseURL:    getEnv("ANTHROPIC_FORWARD_URL", "https://api.anthropic.com"),
-			Version:    getEnv("ANTHROPIC_VERSION", "2023-06-01"),
-			MaxRetries: getInt("ANTHROPIC_MAX_RETRIES", 3),
-		},
 	}
 
-	// Try to load from YAML config file if specified
-	configPath := getEnv("CONFIG_PATH", "../config.yaml")
-	if configPath != "" {
-		if err := cfg.loadFromFile(configPath); err != nil {
-			// Log error but continue with defaults
-			fmt.Printf("Warning: Failed to load config from %s: %v\n", configPath, err)
+	// Try to load config.yaml from the project root
+	// The proxy binary is in proxy/ directory, config.yaml is in the parent
+	configPath := filepath.Join(filepath.Dir(os.Args[0]), "..", "config.yaml")
+
+	// If that doesn't work, try relative to current directory
+	if _, err := os.Stat(configPath); err != nil {
+		// Try common locations relative to where the binary might be run
+		for _, tryPath := range []string{"config.yaml", "../config.yaml", "../../config.yaml"} {
+			if _, err := os.Stat(tryPath); err == nil {
+				configPath = tryPath
+				break
+			}
 		}
+	}
+
+	if err := cfg.loadFromFile(configPath); err == nil {
+		fmt.Printf("Loaded config from %s\n", configPath)
+		fmt.Printf("Subagent mappings: %+v\n", cfg.Subagents.Mappings)
+	}
+
+	// Apply environment variable overrides AFTER loading from file
+	if envPort := os.Getenv("PORT"); envPort != "" {
+		cfg.Server.Port = envPort
+	}
+	if envTimeout := os.Getenv("READ_TIMEOUT"); envTimeout != "" {
+		cfg.Server.ReadTimeout = getDuration("READ_TIMEOUT", cfg.Server.ReadTimeout)
+	}
+	if envTimeout := os.Getenv("WRITE_TIMEOUT"); envTimeout != "" {
+		cfg.Server.WriteTimeout = getDuration("WRITE_TIMEOUT", cfg.Server.WriteTimeout)
+	}
+	if envTimeout := os.Getenv("IDLE_TIMEOUT"); envTimeout != "" {
+		cfg.Server.IdleTimeout = getDuration("IDLE_TIMEOUT", cfg.Server.IdleTimeout)
+	}
+
+	// Override Anthropic settings
+	if envURL := os.Getenv("ANTHROPIC_FORWARD_URL"); envURL != "" {
+		cfg.Providers.Anthropic.BaseURL = envURL
+	}
+	if envVersion := os.Getenv("ANTHROPIC_VERSION"); envVersion != "" {
+		cfg.Providers.Anthropic.Version = envVersion
+	}
+	if envRetries := os.Getenv("ANTHROPIC_MAX_RETRIES"); envRetries != "" {
+		cfg.Providers.Anthropic.MaxRetries = getInt("ANTHROPIC_MAX_RETRIES", cfg.Providers.Anthropic.MaxRetries)
+	}
+
+	// Override OpenAI settings
+	if envURL := os.Getenv("OPENAI_BASE_URL"); envURL != "" {
+		cfg.Providers.OpenAI.BaseURL = envURL
+	}
+	if envKey := os.Getenv("OPENAI_API_KEY"); envKey != "" {
+		cfg.Providers.OpenAI.APIKey = envKey
+	}
+
+	// Override storage settings
+	if envPath := os.Getenv("DB_PATH"); envPath != "" {
+		cfg.Storage.DBPath = envPath
+	}
+
+	// Sync legacy Anthropic config
+	cfg.Anthropic = AnthropicConfig{
+		BaseURL:    cfg.Providers.Anthropic.BaseURL,
+		Version:    cfg.Providers.Anthropic.Version,
+		MaxRetries: cfg.Providers.Anthropic.MaxRetries,
 	}
 
 	// After loading from file, apply any timeout conversions if needed

@@ -2,6 +2,8 @@ package handler
 
 import (
 	"bufio"
+	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -68,23 +70,6 @@ func (h *Handler) Messages(w http.ResponseWriter, r *http.Request) {
 	requestID := generateRequestID()
 	startTime := time.Now()
 
-	// Create request log
-	requestLog := &model.RequestLog{
-		RequestID:   requestID,
-		Timestamp:   time.Now().Format(time.RFC3339),
-		Method:      r.Method,
-		Endpoint:    "/v1/messages",
-		Headers:     SanitizeHeaders(r.Header),
-		Body:        req,
-		Model:       req.Model,
-		UserAgent:   r.Header.Get("User-Agent"),
-		ContentType: r.Header.Get("Content-Type"),
-	}
-
-	if _, err := h.storageService.SaveRequest(requestLog); err != nil {
-		log.Printf("❌ Error saving request: %v", err)
-	}
-
 	// Use model router to determine provider and route the request
 	provider, originalModel, err := h.modelRouter.RouteRequest(&req)
 	if err != nil {
@@ -93,9 +78,44 @@ func (h *Handler) Messages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Update request log with original model (for tracking)
-	requestLog.OriginalModel = originalModel
-	requestLog.RoutedModel = req.Model
+	// Create request log with routing information
+	requestLog := &model.RequestLog{
+		RequestID:     requestID,
+		Timestamp:     time.Now().Format(time.RFC3339),
+		Method:        r.Method,
+		Endpoint:      "/v1/messages",
+		Headers:       SanitizeHeaders(r.Header),
+		Body:          req,
+		Model:         req.Model,
+		OriginalModel: originalModel,
+		RoutedModel:   req.Model,
+		UserAgent:     r.Header.Get("User-Agent"),
+		ContentType:   r.Header.Get("Content-Type"),
+	}
+
+	if _, err := h.storageService.SaveRequest(requestLog); err != nil {
+		log.Printf("❌ Error saving request: %v", err)
+	}
+
+	// If the model was changed by routing, update the request body
+	if req.Model != originalModel {
+		// Re-marshal the request with the updated model
+		updatedBodyBytes, err := json.Marshal(req)
+		if err != nil {
+			log.Printf("❌ Error marshaling updated request: %v", err)
+			writeErrorResponse(w, "Failed to process request", http.StatusInternalServerError)
+			return
+		}
+
+		// Create a new request with the updated body
+		r.Body = io.NopCloser(bytes.NewReader(updatedBodyBytes))
+		r.ContentLength = int64(len(updatedBodyBytes))
+		r.Header.Set("Content-Length", fmt.Sprintf("%d", len(updatedBodyBytes)))
+
+		// Update the context with new body bytes for logging
+		ctx := context.WithValue(r.Context(), model.BodyBytesKey, updatedBodyBytes)
+		r = r.WithContext(ctx)
+	}
 
 	// Forward the request to the selected provider
 	resp, err := provider.ForwardRequest(r.Context(), r)
@@ -182,8 +202,6 @@ func (h *Handler) GetRequests(w http.ResponseWriter, r *http.Request) {
 		modelFilter = "all"
 	}
 
-	log.Printf("📊 GetRequests called - page: %d, limit: %d, modelFilter: %s", page, limit, modelFilter)
-
 	// Get all requests with model filter applied at storage level
 	allRequests, err := h.storageService.GetAllRequests(modelFilter)
 	if err != nil {
@@ -191,8 +209,6 @@ func (h *Handler) GetRequests(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to get requests", http.StatusInternalServerError)
 		return
 	}
-
-	log.Printf("📊 Got %d requests from storage (filter: %s)", len(allRequests), modelFilter)
 
 	// Convert pointers to values for consistency
 	requests := make([]model.RequestLog, len(allRequests))
@@ -216,8 +232,6 @@ func (h *Handler) GetRequests(w http.ResponseWriter, r *http.Request) {
 		}
 		requests = requests[start:end]
 	}
-
-	log.Printf("📊 Returning %d requests after pagination", len(requests))
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(struct {
@@ -314,7 +328,7 @@ func (h *Handler) handleStreamingResponse(w http.ResponseWriter, resp *http.Resp
 			continue
 		}
 
-		// Capture usage data and metadata from message_start event
+		// Capture metadata from message_start event
 		if eventType, ok := genericEvent["type"].(string); ok && eventType == "message_start" {
 			if message, ok := genericEvent["message"].(map[string]interface{}); ok {
 				// Capture message metadata
@@ -327,51 +341,42 @@ func (h *Handler) handleStreamingResponse(w http.ResponseWriter, resp *http.Resp
 				if reason, ok := message["stop_reason"].(string); ok {
 					stopReason = reason
 				}
-
-				// Capture initial usage data from message_start
-				if usage, ok := message["usage"].(map[string]interface{}); ok {
-					finalUsage = &model.AnthropicUsage{}
-					if inputTokens, ok := usage["input_tokens"].(float64); ok {
-						finalUsage.InputTokens = int(inputTokens)
-					}
-					if outputTokens, ok := usage["output_tokens"].(float64); ok {
-						finalUsage.OutputTokens = int(outputTokens)
-					}
-					if cacheCreation, ok := usage["cache_creation_input_tokens"].(float64); ok {
-						finalUsage.CacheCreationInputTokens = int(cacheCreation)
-					}
-					if cacheRead, ok := usage["cache_read_input_tokens"].(float64); ok {
-						finalUsage.CacheReadInputTokens = int(cacheRead)
-					}
-					if tier, ok := usage["service_tier"].(string); ok {
-						finalUsage.ServiceTier = tier
-					}
-					log.Printf("📊 Captured initial usage from message_start: %+v", finalUsage)
-				} else {
-					log.Printf("⚠️ No usage data found in message_start event")
-				}
+				// Don't capture usage from message_start - it will come in message_delta
 			}
 		}
 
-		// Update output tokens from message_delta event
+		// Capture usage data from message_delta event
 		if eventType, ok := genericEvent["type"].(string); ok && eventType == "message_delta" {
 			// Usage is at top level for message_delta events
 			if usage, ok := genericEvent["usage"].(map[string]interface{}); ok {
-				if finalUsage != nil {
-					if outputTokens, ok := usage["output_tokens"].(float64); ok {
-						finalUsage.OutputTokens = int(outputTokens)
-						log.Printf("📊 Updated output tokens from message_delta: %d", int(outputTokens))
-					}
-				} else {
-					log.Printf("⚠️ finalUsage is nil when trying to update from message_delta usage")
+				// Create finalUsage if it doesn't exist yet
+				if finalUsage == nil {
+					finalUsage = &model.AnthropicUsage{}
 				}
+
+				// Capture all usage fields
+				if inputTokens, ok := usage["input_tokens"].(float64); ok {
+					finalUsage.InputTokens = int(inputTokens)
+				}
+				if outputTokens, ok := usage["output_tokens"].(float64); ok {
+					finalUsage.OutputTokens = int(outputTokens)
+				}
+				if cacheCreation, ok := usage["cache_creation_input_tokens"].(float64); ok {
+					finalUsage.CacheCreationInputTokens = int(cacheCreation)
+				}
+				if cacheRead, ok := usage["cache_read_input_tokens"].(float64); ok {
+					finalUsage.CacheReadInputTokens = int(cacheRead)
+				}
+
+				log.Printf("📊 Captured usage from message_delta: %+v", finalUsage)
 			}
 		}
 
 		// Parse as structured event for content processing
 		var event model.StreamingEvent
 		if err := json.Unmarshal([]byte(jsonData), &event); err != nil {
-			continue // Skip if structured parsing fails, but we already got the usage data above
+			// Skip if structured parsing fails, but we already got the usage data above
+			continue
 		}
 
 		switch event.Type {

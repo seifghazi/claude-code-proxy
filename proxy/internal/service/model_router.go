@@ -59,6 +59,8 @@ func (r *ModelRouter) extractStaticPrompt(systemPrompt string) string {
 }
 
 func (r *ModelRouter) loadCustomAgents() {
+	r.logger.Printf("Loading custom agents from mappings: %+v", r.subagentMappings)
+
 	for agentName, targetModel := range r.subagentMappings {
 		// Try loading from project level first, then user level
 		paths := []string{
@@ -67,19 +69,27 @@ func (r *ModelRouter) loadCustomAgents() {
 		}
 
 		for _, path := range paths {
+			r.logger.Printf("Trying to load agent from: %s", path)
 			content, err := os.ReadFile(path)
 			if err != nil {
+				r.logger.Printf("Failed to read %s: %v", path, err)
 				continue
 			}
 
+			r.logger.Printf("Successfully read agent file: %s (size: %d bytes)", path, len(content))
+
 			// Parse agent file: metadata\n---\nsystem prompt
 			parts := strings.Split(string(content), "\n---\n")
+			r.logger.Printf("Agent file parts: %d", len(parts))
 			if len(parts) >= 2 {
 				systemPrompt := strings.TrimSpace(parts[1])
+				r.logger.Printf("System prompt (first 200 chars): %.200s", systemPrompt)
 
 				// Extract only the static part (before "Notes:" if it exists)
 				staticPrompt := r.extractStaticPrompt(systemPrompt)
 				hash := r.hashString(staticPrompt)
+
+				r.logger.Printf("Static prompt after extraction (first 200 chars): %.200s", staticPrompt)
 
 				// Determine provider for the target model
 				providerName := r.getProviderNameForModel(targetModel)
@@ -91,20 +101,35 @@ func (r *ModelRouter) loadCustomAgents() {
 					FullPrompt:     staticPrompt,
 				}
 
-				r.logger.Printf("Loaded custom agent: %s (hash: %s) -> %s",
-					agentName, hash, targetModel)
+				r.logger.Printf("Loaded custom agent: %s (hash: %s) -> %s (provider: %s)",
+					agentName, hash, targetModel, providerName)
 				break
+			} else {
+				r.logger.Printf("Invalid agent file format for %s: expected at least 2 parts separated by ---", agentName)
 			}
 		}
 	}
+
+	r.logger.Printf("Total custom agents loaded: %d", len(r.customAgentPrompts))
 }
 
 // RouteRequest determines which provider and model to use for a request
 func (r *ModelRouter) RouteRequest(req *model.AnthropicRequest) (provider.Provider, string, error) {
 	originalModel := req.Model
 
+	r.logger.Printf("RouteRequest: Model=%s, System messages count=%d", originalModel, len(req.System))
+
+	// Debug: Print loaded custom agents
+	r.logger.Printf("Loaded custom agents: %d", len(r.customAgentPrompts))
+	for hash, def := range r.customAgentPrompts {
+		r.logger.Printf("  Agent: %s (hash: %s) -> %s", def.Name, hash, def.TargetModel)
+	}
+
 	// Claude Code pattern: Check if we have exactly 2 system messages
 	if len(req.System) == 2 {
+		r.logger.Printf("System[0]: %.100s...", req.System[0].Text)
+		r.logger.Printf("System[1]: %.100s...", req.System[1].Text)
+
 		// First should be "You are Claude Code..."
 		if strings.Contains(req.System[0].Text, "You are Claude Code") {
 			// Second message could be either:
@@ -116,6 +141,9 @@ func (r *ModelRouter) RouteRequest(req *model.AnthropicRequest) (provider.Provid
 			// Extract static portion (before "Notes:" if it exists)
 			staticPrompt := r.extractStaticPrompt(fullPrompt)
 			promptHash := r.hashString(staticPrompt)
+
+			r.logger.Printf("Static prompt hash: %s", promptHash)
+			r.logger.Printf("Static prompt (first 200 chars): %.200s", staticPrompt)
 
 			// Check if this matches a known custom agent
 			if definition, exists := r.customAgentPrompts[promptHash]; exists {
@@ -133,7 +161,7 @@ func (r *ModelRouter) RouteRequest(req *model.AnthropicRequest) (provider.Provid
 			}
 
 			// This is a regular Claude Code request (not a known subagent)
-			r.logger.Printf("Regular Claude Code request detected, using original model %s", originalModel)
+			r.logger.Printf("No matching subagent found for hash %s, using original model %s", promptHash, originalModel)
 		}
 	}
 
@@ -150,14 +178,17 @@ func (r *ModelRouter) RouteRequest(req *model.AnthropicRequest) (provider.Provid
 func (r *ModelRouter) hashString(s string) string {
 	h := sha256.New()
 	h.Write([]byte(s))
-	return hex.EncodeToString(h.Sum(nil))[:16]
+	fullHash := hex.EncodeToString(h.Sum(nil))
+	shortHash := fullHash[:16]
+	r.logger.Printf("Hashing string (length: %d) -> %s", len(s), shortHash)
+	return shortHash
 }
 
 func (r *ModelRouter) getProviderNameForModel(model string) string {
 	// Map models to providers
 	if strings.HasPrefix(model, "claude") {
 		return "anthropic"
-	} else if strings.HasPrefix(model, "gpt") {
+	} else if strings.HasPrefix(model, "gpt") || strings.HasPrefix(model, "o") {
 		return "openai"
 	}
 	// Default to anthropic

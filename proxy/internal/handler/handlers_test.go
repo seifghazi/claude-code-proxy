@@ -16,10 +16,10 @@ import (
 
 // MockStorageService implements StorageService interface for testing
 type MockStorageService struct {
-	SavedRequests   []model.RequestLog
-	ReturnError     error
+	SavedRequests    []model.RequestLog
+	ReturnError      error
 	RequestsToReturn []model.RequestLog
-	TotalRequests   int
+	TotalRequests    int
 }
 
 func (m *MockStorageService) SaveRequest(request *model.RequestLog) (string, error) {
@@ -87,8 +87,8 @@ func (m *MockStorageService) GetAllRequests(modelFilter string) ([]*model.Reques
 
 // MockAnthropicService implements AnthropicService interface for testing
 type MockAnthropicService struct {
-	ReturnResponse *http.Response
-	ReturnError    error
+	ReturnResponse  *http.Response
+	ReturnError     error
 	ReceivedRequest *http.Request
 }
 
@@ -103,8 +103,8 @@ func (m *MockAnthropicService) ForwardRequest(ctx context.Context, originalReq *
 	// Return a default successful response
 	return &http.Response{
 		StatusCode: 200,
-		Body: io.NopCloser(bytes.NewBufferString(`{"id":"test","content":[{"text":"Hello"}]}`)),
-		Header: make(http.Header),
+		Body:       io.NopCloser(bytes.NewBufferString(`{"id":"test","content":[{"text":"Hello"}]}`)),
+		Header:     make(http.Header),
 	}, nil
 }
 

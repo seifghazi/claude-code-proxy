@@ -131,14 +131,9 @@ type Tool struct {
 }
 
 type InputSchema struct {
-	Type       string              `json:"type"`
-	Properties map[string]Property `json:"properties"`
-	Required   []string            `json:"required,omitempty"`
-}
-
-type Property struct {
-	Type        string `json:"type"`
-	Description string `json:"description"`
+	Type       string                 `json:"type"`
+	Properties map[string]interface{} `json:"properties"`
+	Required   []string               `json:"required,omitempty"`
 }
 
 type AnthropicRequest struct {
@@ -149,6 +144,7 @@ type AnthropicRequest struct {
 	System      []AnthropicSystemMessage `json:"system,omitempty"`
 	Stream      bool                     `json:"stream,omitempty"`
 	Tools       []Tool                   `json:"tools,omitempty"`
+	ToolChoice  interface{}              `json:"tool_choice,omitempty"`
 }
 
 type ModelsResponse struct {
