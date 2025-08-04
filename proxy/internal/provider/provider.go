@@ -11,5 +11,5 @@ type Provider interface {
 	Name() string
 
 	// ForwardRequest forwards a request to the provider's API
-	ForwardRequest(ctx context.Context, originalReq *http.Request) (*http.Response, error)
+	ForwardRequest(ctx context.Context, req *http.Request) (*http.Response, error)
 }

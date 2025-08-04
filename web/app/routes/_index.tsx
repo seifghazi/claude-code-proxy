@@ -190,53 +190,8 @@ export default function Index() {
       });
     } catch (error) {
       console.error('Failed to load requests:', error);
-      
-      // Fallback to example data for demo
-      const exampleRequest = {
-        timestamp: "2025-06-04T23:47:37-04:00",
-        method: "POST",
-        endpoint: "/v1/messages",
-        headers: {
-          "User-Agent": ["claude-cli/1.0.11 (external, cli)"],
-          "Content-Type": ["application/json"],
-          "Anthropic-Version": ["2023-06-01"]
-        },
-        body: {
-          model: "claude-sonnet-4-20250514",
-          messages: [
-            {
-              role: "user",
-              content: [{
-                type: "text",
-                text: "I need to extract the complete list of tools available to Claude Code from the request file..."
-              }]
-            }
-          ],
-          max_tokens: 32000,
-          temperature: 1,
-          stream: true
-        }
-      };
-
       startTransition(() => {
-        // setRequests([
-        //   { ...exampleRequest, id: 1 },
-        //   { 
-        //     ...exampleRequest, 
-        //     id: 2, 
-        //     timestamp: "2025-06-04T23:45:12-04:00",
-        //     endpoint: "/v1/chat/completions",
-        //     body: { ...exampleRequest.body, model: "gpt-4-turbo" }
-        //   },
-        //   { 
-        //     ...exampleRequest, 
-        //     id: 3, 
-        //     timestamp: "2025-06-04T23:42:33-04:00",
-        //     method: "GET",
-        //     endpoint: "/v1/models",
-        //     body: undefined
-        //   }
-        // ]);
+        setRequests([]);
       });
     } finally {
       setIsFetching(false);
@@ -527,6 +482,26 @@ export default function Index() {
       loadConversations(modelFilter);
     }
   }, [viewMode, modelFilter]);
+
+  // Handle escape key to close modals
+  useEffect(() => {
+    const handleEscapeKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        if (isModalOpen) {
+          closeModal();
+        } else if (isConversationModalOpen) {
+          setIsConversationModalOpen(false);
+          setSelectedConversation(null);
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleEscapeKey);
+    
+    return () => {
+      window.removeEventListener('keydown', handleEscapeKey);
+    };
+  }, [isModalOpen, isConversationModalOpen]);
 
   const filteredRequests = filterRequests(filter);
 

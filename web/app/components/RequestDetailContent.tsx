@@ -82,7 +82,7 @@ interface RequestDetailContentProps {
 export default function RequestDetailContent({ request, onGrade }: RequestDetailContentProps) {
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
     overview: true,
-    conversation: true
+    // conversation: true
   });
   const [copied, setCopied] = useState<Record<string, boolean>>({});
 
@@ -352,7 +352,7 @@ export default function RequestDetailContent({ request, onGrade }: RequestDetail
                             {request.routedModel}
                           </code>
                           <span className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded-full border border-blue-200">
-                            {request.routedModel.startsWith('gpt-') ? 'OpenAI' : 'Anthropic'}
+                            {request.routedModel.startsWith('gpt-') || request.routedModel.startsWith('o') ? 'OpenAI' : 'Anthropic'}
                           </span>
                         </div>
                       </div>

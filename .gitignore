@@ -39,3 +39,7 @@ coverage/
 # Temporary files
 tmp/
 temp/
+
+
+# Config
+config.yaml

@@ -1,7 +1,6 @@
 package config
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -16,7 +15,6 @@ type Config struct {
 	Providers ProvidersConfig `yaml:"providers"`
 	Storage   StorageConfig   `yaml:"storage"`
 	Subagents SubagentsConfig `yaml:"subagents"`
-	// Legacy fields for backward compatibility
 	Anthropic AnthropicConfig
 }
 
@@ -63,6 +61,7 @@ type StorageConfig struct {
 }
 
 type SubagentsConfig struct {
+	Enable   bool              `yaml:"enable"`
 	Mappings map[string]string `yaml:"mappings"`
 }
 
@@ -101,6 +100,7 @@ func Load() (*Config, error) {
 			DBPath: "requests.db",
 		},
 		Subagents: SubagentsConfig{
+			Enable:   false,
 			Mappings: make(map[string]string),
 		},
 	}
@@ -120,10 +120,7 @@ func Load() (*Config, error) {
 		}
 	}
 
-	if err := cfg.loadFromFile(configPath); err == nil {
-		fmt.Printf("Loaded config from %s\n", configPath)
-		fmt.Printf("Subagent mappings: %+v\n", cfg.Subagents.Mappings)
-	}
+	cfg.loadFromFile(configPath)
 
 	// Apply environment variable overrides AFTER loading from file
 	if envPort := os.Getenv("PORT"); envPort != "" {

@@ -3,7 +3,6 @@ package handler
 import (
 	"bufio"
 	"bytes"
-	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -44,22 +43,20 @@ func New(anthropicService service.AnthropicService, storageService service.Stora
 }
 
 func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
-	log.Println("🤖 Chat completion request received (OpenAI format)")
-
 	// This endpoint is for compatibility but we're an Anthropic proxy
 	// Return a helpful error message
 	writeErrorResponse(w, "This is an Anthropic proxy. Please use the /v1/messages endpoint instead of /v1/chat/completions", http.StatusBadRequest)
 }
 
 func (h *Handler) Messages(w http.ResponseWriter, r *http.Request) {
-	log.Println("🤖 Messages request received (Anthropic format)")
-
+	// Get body bytes from context (set by middleware)
 	bodyBytes := getBodyBytes(r)
 	if bodyBytes == nil {
 		http.Error(w, "Error reading request body", http.StatusBadRequest)
 		return
 	}
 
+	// Parse the request
 	var req model.AnthropicRequest
 	if err := json.Unmarshal(bodyBytes, &req); err != nil {
 		log.Printf("❌ Error parsing JSON: %v", err)
@@ -71,7 +68,7 @@ func (h *Handler) Messages(w http.ResponseWriter, r *http.Request) {
 	startTime := time.Now()
 
 	// Use model router to determine provider and route the request
-	provider, originalModel, err := h.modelRouter.RouteRequest(&req)
+	decision, err := h.modelRouter.DetermineRoute(&req)
 	if err != nil {
 		log.Printf("❌ Error routing request: %v", err)
 		writeErrorResponse(w, "Failed to route request", http.StatusInternalServerError)
@@ -83,12 +80,12 @@ func (h *Handler) Messages(w http.ResponseWriter, r *http.Request) {
 		RequestID:     requestID,
 		Timestamp:     time.Now().Format(time.RFC3339),
 		Method:        r.Method,
-		Endpoint:      "/v1/messages",
+		Endpoint:      r.URL.Path,
 		Headers:       SanitizeHeaders(r.Header),
 		Body:          req,
-		Model:         req.Model,
-		OriginalModel: originalModel,
-		RoutedModel:   req.Model,
+		Model:         decision.OriginalModel,
+		OriginalModel: decision.OriginalModel,
+		RoutedModel:   decision.TargetModel,
 		UserAgent:     r.Header.Get("User-Agent"),
 		ContentType:   r.Header.Get("Content-Type"),
 	}
@@ -98,7 +95,9 @@ func (h *Handler) Messages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// If the model was changed by routing, update the request body
-	if req.Model != originalModel {
+	if decision.TargetModel != decision.OriginalModel {
+		req.Model = decision.TargetModel
+
 		// Re-marshal the request with the updated model
 		updatedBodyBytes, err := json.Marshal(req)
 		if err != nil {
@@ -107,20 +106,16 @@ func (h *Handler) Messages(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Create a new request with the updated body
+		// Update the request body
 		r.Body = io.NopCloser(bytes.NewReader(updatedBodyBytes))
 		r.ContentLength = int64(len(updatedBodyBytes))
 		r.Header.Set("Content-Length", fmt.Sprintf("%d", len(updatedBodyBytes)))
-
-		// Update the context with new body bytes for logging
-		ctx := context.WithValue(r.Context(), model.BodyBytesKey, updatedBodyBytes)
-		r = r.WithContext(ctx)
 	}
 
 	// Forward the request to the selected provider
-	resp, err := provider.ForwardRequest(r.Context(), r)
+	resp, err := decision.Provider.ForwardRequest(r.Context(), r)
 	if err != nil {
-		log.Printf("❌ Error forwarding to %s API: %v", provider.Name(), err)
+		log.Printf("❌ Error forwarding to %s API: %v", decision.Provider.Name(), err)
 		writeErrorResponse(w, "Failed to forward request", http.StatusInternalServerError)
 		return
 	}
@@ -135,7 +130,6 @@ func (h *Handler) Messages(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Models(w http.ResponseWriter, r *http.Request) {
-	log.Println("📋 Models list requested")
 
 	response := &model.ModelsResponse{
 		Object: "list",
@@ -176,7 +170,7 @@ func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) UI(w http.ResponseWriter, r *http.Request) {
 	htmlContent, err := os.ReadFile("index.html")
 	if err != nil {
-		log.Printf("❌ Error reading index.html: %v", err)
+		// Error reading index.html
 		http.Error(w, "UI not available", http.StatusNotFound)
 		return
 	}
@@ -244,16 +238,13 @@ func (h *Handler) GetRequests(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) DeleteRequests(w http.ResponseWriter, r *http.Request) {
-	log.Println("🗑️ Clearing request history")
 
 	clearedCount, err := h.storageService.ClearRequests()
 	if err != nil {
-		log.Printf("❌ Error clearing requests: %v", err)
+		log.Printf("Error clearing requests: %v", err)
 		writeErrorResponse(w, "Error clearing request history", http.StatusInternalServerError)
 		return
 	}
-
-	log.Printf("✅ Deleted %d request files", clearedCount)
 
 	response := map[string]interface{}{
 		"message": "Request history cleared",
@@ -268,7 +259,6 @@ func (h *Handler) NotFound(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleStreamingResponse(w http.ResponseWriter, resp *http.Response, requestLog *model.RequestLog, startTime time.Time) {
-	log.Println("🌊 Streaming response detected, forwarding stream...")
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -341,7 +331,6 @@ func (h *Handler) handleStreamingResponse(w http.ResponseWriter, resp *http.Resp
 				if reason, ok := message["stop_reason"].(string); ok {
 					stopReason = reason
 				}
-				// Don't capture usage from message_start - it will come in message_delta
 			}
 		}
 
@@ -368,7 +357,6 @@ func (h *Handler) handleStreamingResponse(w http.ResponseWriter, resp *http.Resp
 					finalUsage.CacheReadInputTokens = int(cacheRead)
 				}
 
-				log.Printf("📊 Captured usage from message_delta: %+v", finalUsage)
 			}
 		}
 
@@ -430,9 +418,6 @@ func (h *Handler) handleStreamingResponse(w http.ResponseWriter, resp *http.Resp
 	// Add usage data if we captured it
 	if finalUsage != nil {
 		responseBody["usage"] = finalUsage
-		log.Printf("📊 Final usage data being stored: %+v", finalUsage)
-	} else {
-		log.Printf("⚠️ No usage data captured for streaming response - finalUsage is nil")
 	}
 
 	// Marshal to JSON for storage
@@ -457,20 +442,11 @@ func (h *Handler) handleStreamingResponse(w http.ResponseWriter, resp *http.Resp
 }
 
 func (h *Handler) handleNonStreamingResponse(w http.ResponseWriter, resp *http.Response, requestLog *model.RequestLog, startTime time.Time) {
-	// Log response headers for debugging
-	log.Printf("📋 Response headers: Content-Encoding=%s, Content-Type=%s, Status=%d",
-		resp.Header.Get("Content-Encoding"), resp.Header.Get("Content-Type"), resp.StatusCode)
-
 	responseBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		log.Printf("❌ Error reading Anthropic response: %v", err)
 		writeErrorResponse(w, "Failed to read response", http.StatusInternalServerError)
 		return
-	}
-
-	// Log first few bytes to help debug compression issues
-	if len(responseBytes) > 0 {
-		log.Printf("📊 Response body starts with: %x (first 10 bytes)", responseBytes[:min(10, len(responseBytes))])
 	}
 
 	responseLog := &model.ResponseLog{
@@ -487,7 +463,6 @@ func (h *Handler) handleNonStreamingResponse(w http.ResponseWriter, resp *http.R
 		if err := json.Unmarshal(responseBytes, &anthropicResp); err == nil {
 			// Successfully parsed - store the structured response
 			responseLog.Body = json.RawMessage(responseBytes)
-			log.Printf("✅ Successfully parsed Anthropic response")
 		} else {
 			// If parsing fails, store as text but log the error
 			log.Printf("⚠️ Failed to parse Anthropic response: %v", err)
@@ -512,7 +487,6 @@ func (h *Handler) handleNonStreamingResponse(w http.ResponseWriter, resp *http.R
 		return
 	}
 
-	log.Println("✅ Successfully forwarded request to Anthropic API")
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(responseBytes)
 }
@@ -618,7 +592,6 @@ func extractTextFromMessage(message json.RawMessage) string {
 // Conversation handlers
 
 func (h *Handler) GetConversations(w http.ResponseWriter, r *http.Request) {
-	log.Println("📚 Getting conversations from Claude projects")
 
 	conversations, err := h.conversationService.GetConversations()
 	if err != nil {
@@ -708,8 +681,6 @@ func (h *Handler) GetConversationByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("📖 Getting conversation %s from project %s", sessionID, projectPath)
-
 	conversation, err := h.conversationService.GetConversation(projectPath, sessionID)
 	if err != nil {
 		log.Printf("❌ Error getting conversation: %v", err)
@@ -726,8 +697,6 @@ func (h *Handler) GetConversationsByProject(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "Project path is required", http.StatusBadRequest)
 		return
 	}
-
-	log.Printf("📁 Getting conversations for project %s", projectPath)
 
 	conversations, err := h.conversationService.GetConversationsByProject(projectPath)
 	if err != nil {

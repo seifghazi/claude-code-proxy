@@ -25,9 +25,6 @@ providers:
     # Base URL for Anthropic API (can be changed for custom endpoints)
     base_url: "https://api.anthropic.com"
     
-    # API version to use
-    version: "2023-06-01"
-    
     # Maximum number of retries for failed requests
     max_retries: 3
   
@@ -35,7 +32,7 @@ providers:
   openai:
     # API key for OpenAI
     # Can also be set via OPENAI_API_KEY environment variable
-    # api_key: "sk-..."
+    # api_key: "..."
     
     # Base URL for OpenAI API (can be changed for custom endpoints)
     # Can also be set via OPENAI_BASE_URL environment variable
@@ -49,15 +46,21 @@ storage:
   # Directory for storing request files (if needed in future)
   # requests_dir: "./requests"
 
-# Subagent mappings
-# Maps subagent types to specific models
+# Subagent Configuration (Optional)
+# Enable this feature if you want to route specific Claude Code agents to different LLM providers
+# For subagent setup instructions, see: https://docs.anthropic.com/en/docs/claude-code/sub-agents
 subagents:
+  # Enable subagent routing (default: false)
+  enable: false
+  
+  # Maps subagent types to specific models
+  # Only used when enable: true
   mappings:
     # Code review specialist (example)
     # code-reviewer: "gpt-4o"
     
     # Data analysis expert (example)
-    # data-analyst: "claude-3-5-sonnet-20241022"
+    # data-analyst: "o3"
     
     # Documentation writer (example)
     # doc-writer: "gpt-3.5-turbo"
@@ -78,6 +81,7 @@ subagents:
 #
 # OpenAI:
 #   OPENAI_API_KEY           - OpenAI API key
+#   OPENAI_BASE_URL          - OpenAI base URL
 #
 # Storage:
 #   DB_PATH                  - Database file path

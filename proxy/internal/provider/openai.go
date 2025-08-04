@@ -98,7 +98,7 @@ func (p *OpenAIProvider) ForwardRequest(ctx context.Context, originalReq *http.R
 		resp.Body.Close()
 
 		// Log the error details
-		fmt.Printf("OpenAI API error: Status=%d, Body=%s\n", resp.StatusCode, string(errorBody))
+		// OpenAI API error - will be returned to client
 
 		// Create an error response in Anthropic format
 		errorResp := map[string]interface{}{
@@ -335,7 +335,7 @@ func convertAnthropicToOpenAI(req *model.AnthropicRequest) map[string]interface{
 	// Check if max_tokens exceeds the model's limit and cap it if necessary
 	maxTokensLimit := 16384 // Assuming this is the limit for the model
 	if req.MaxTokens > maxTokensLimit {
-		fmt.Printf("Warning: max_tokens is too large: %d. Capping to %d.\n", req.MaxTokens, maxTokensLimit)
+		// Capping max_tokens to model limit
 		req.MaxTokens = maxTokensLimit
 	}
 
@@ -361,16 +361,13 @@ func convertAnthropicToOpenAI(req *model.AnthropicRequest) map[string]interface{
 	if !isOSeriesModel {
 		openAIReq["temperature"] = req.Temperature
 	}
-
-	fmt.Printf("Using max_completion_tokens=%d for model %s\n", req.MaxTokens, req.Model)
-
 	// Convert Anthropic tools to OpenAI format
 	if len(req.Tools) > 0 {
 		tools := make([]map[string]interface{}, 0, len(req.Tools))
 		for _, tool := range req.Tools {
 			// Ensure tool has required fields
 			if tool.Name == "" {
-				fmt.Printf("Warning: Skipping tool with empty name\n")
+				// Skip tools with empty names
 				continue
 			}
 
@@ -391,7 +388,7 @@ func convertAnthropicToOpenAI(req *model.AnthropicRequest) map[string]interface{
 						if propType, hasType := prop["type"]; hasType && propType == "array" {
 							if _, hasItems := prop["items"]; !hasItems {
 								// Add default items definition for arrays
-								fmt.Printf("Warning: Array property '%s' in tool '%s' missing items - adding default\n", propName, tool.Name)
+								// Add default items for array properties missing them
 								prop["items"] = map[string]interface{}{"type": "string"}
 							}
 						}
@@ -520,7 +517,7 @@ func transformOpenAIResponseToAnthropic(respBody []byte) []byte {
 										anthropicToolUse["input"] = args
 									} else {
 										// If parsing fails, wrap in a raw field like Python does
-										fmt.Printf("Warning: Failed to parse tool arguments as JSON: %v\n", err)
+										// Failed to parse tool arguments - skip
 										anthropicToolUse["input"] = map[string]interface{}{"raw": argsStr}
 									}
 								} else if args, ok := function["arguments"].(map[string]interface{}); ok {
@@ -620,22 +617,9 @@ func transformOpenAIStreamToAnthropic(openAIStream io.ReadCloser, anthropicStrea
 				continue
 			}
 
-			// Debug: Check if this is the final chunk
-			if choices, ok := openAIChunk["choices"].([]interface{}); ok && len(choices) > 0 {
-				if choice, ok := choices[0].(map[string]interface{}); ok {
-					if finishReason, ok := choice["finish_reason"]; ok && finishReason != nil {
-						fmt.Printf("🏁 Final chunk detected with finish_reason: %v\n", finishReason)
-						fmt.Printf("🏁 Full final chunk: %+v\n", openAIChunk)
-					}
-				}
-			}
-
 			// Check for usage data BEFORE processing choices
 			// According to OpenAI docs, usage is sent in the final chunk with empty choices array
 			if usage, hasUsage := openAIChunk["usage"].(map[string]interface{}); hasUsage {
-				fmt.Printf("🔍 Found usage data in OpenAI stream: %+v\n", usage)
-				fmt.Printf("🔍 Full OpenAI chunk with usage: %+v\n", openAIChunk)
-
 				// Convert OpenAI usage to Anthropic format
 				anthropicUsage := map[string]interface{}{}
 

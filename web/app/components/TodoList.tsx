@@ -16,11 +16,6 @@ interface TodoListProps {
 }
 
 export function TodoList({ todos }: TodoListProps) {
-  // Debug: Log the structure of the first todo
-  if (todos && todos.length > 0) {
-    console.log('Todo structure:', todos[0]);
-  }
-
   if (!todos || todos.length === 0) {
     return (
       <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 text-center">

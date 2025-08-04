@@ -21,17 +21,23 @@ providers:
   openai:
     # API key can be set here or via OPENAI_API_KEY environment variable
     # api_key: "your-api-key-here"
-    base_url: "https://proxy-shopify-ai.local.shop.dev"
+    # base_url: ""
 
 # Storage configuration
 storage:
   # SQLite database path for storing request history
   db_path: "requests.db"
 
-# Subagent mappings
-# Maps subagent types to specific models
+# Subagent Configuration (Optional)
+# Enable this feature if you want to route specific Claude Code agents to different LLM providers
+# For subaget setup instructions, see: https://docs.anthropic.com/en/docs/claude-code/sub-agents
 subagents:
+  # Enable subagent routing
+  enable: false
+  
+  # Maps subagent types to specific models
   mappings:
     streaming-systems-engineer: "gpt-4o"
+    codebase-analyzer: "gpt-4o"
     # Add more subagent mappings as needed
     # example-agent: "gpt-4o"

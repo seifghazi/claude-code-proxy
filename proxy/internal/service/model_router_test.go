@@ -21,7 +21,6 @@ func TestModelRouter_EdgeCases(t *testing.T) {
 	}
 
 	providers := make(map[string]provider.Provider)
-	// Mock providers - in real test you'd use mocks
 	providers["anthropic"] = nil
 	providers["openai"] = nil
 
@@ -74,9 +73,6 @@ func TestModelRouter_EdgeCases(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Since we can't test with real providers, we'll just test the logic
-			// by checking that extractStaticPrompt works correctly
-
 			if len(tt.request.System) == 2 {
 				// Test extract static prompt for second message
 				fullPrompt := tt.request.System[1].Text
