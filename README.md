@@ -64,7 +64,13 @@ Claude Code Proxy serves three main purposes:
    cd claude-code-proxy
    ```
 
-2. **Build and run with Docker**
+2. **Configure the proxy**
+   ```bash
+   cp config.yaml.example config.yaml
+   # Edit config.yaml as needed
+   ```
+
+3. **Build and run with Docker**
    ```bash
    # Build the image
    docker build -t claude-code-proxy .
@@ -73,12 +79,18 @@ Claude Code Proxy serves three main purposes:
    docker run -p 3001:3001 -p 5173:5173 claude-code-proxy
    ```
 
-3. **Run with persistent data and custom configuration**
+4. **Run with persistent data and custom configuration**
    ```bash
    # Create a data directory for persistent SQLite database
    mkdir -p ./data
    
-   # Run with volume mount and custom environment variables
+   # Option 1: Run with config file (recommended)
+   docker run -p 3001:3001 -p 5173:5173 \
+     -v ./data:/app/data \
+     -v ./config.yaml:/app/config.yaml:ro \
+     claude-code-proxy
+   
+   # Option 2: Run with environment variables
    docker run -p 3001:3001 -p 5173:5173 \
      -v ./data:/app/data \
      -e ANTHROPIC_FORWARD_URL=https://api.anthropic.com \
@@ -87,7 +99,7 @@ Claude Code Proxy serves three main purposes:
      claude-code-proxy
    ```
 
-4. **Docker Compose (alternative)**
+5. **Docker Compose (alternative)**
    ```yaml
    # docker-compose.yml
    version: '3.8'
@@ -99,6 +111,7 @@ Claude Code Proxy serves three main purposes:
          - "5173:5173"
        volumes:
          - ./data:/app/data
+         - ./config.yaml:/app/config.yaml:ro  # Mount config file
        environment:
          - ANTHROPIC_FORWARD_URL=https://api.anthropic.com
          - PORT=3001
