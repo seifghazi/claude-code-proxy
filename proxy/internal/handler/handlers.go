@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -25,35 +26,37 @@ type Handler struct {
 	anthropicService    service.AnthropicService
 	storageService      service.StorageService
 	conversationService service.ConversationService
+	modelRouter         *service.ModelRouter
+	logger              *log.Logger
 }
 
-func New(anthropicService service.AnthropicService, storageService service.StorageService, logger *log.Logger) *Handler {
+func New(anthropicService service.AnthropicService, storageService service.StorageService, logger *log.Logger, modelRouter *service.ModelRouter) *Handler {
 	conversationService := service.NewConversationService()
 
 	return &Handler{
 		anthropicService:    anthropicService,
 		storageService:      storageService,
 		conversationService: conversationService,
+		modelRouter:         modelRouter,
+		logger:              logger,
 	}
 }
 
 func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
-	log.Println("🤖 Chat completion request received (OpenAI format)")
-
 	// This endpoint is for compatibility but we're an Anthropic proxy
 	// Return a helpful error message
 	writeErrorResponse(w, "This is an Anthropic proxy. Please use the /v1/messages endpoint instead of /v1/chat/completions", http.StatusBadRequest)
 }
 
 func (h *Handler) Messages(w http.ResponseWriter, r *http.Request) {
-	log.Println("🤖 Messages request received (Anthropic format)")
-
+	// Get body bytes from context (set by middleware)
 	bodyBytes := getBodyBytes(r)
 	if bodyBytes == nil {
 		http.Error(w, "Error reading request body", http.StatusBadRequest)
 		return
 	}
 
+	// Parse the request
 	var req model.AnthropicRequest
 	if err := json.Unmarshal(bodyBytes, &req); err != nil {
 		log.Printf("❌ Error parsing JSON: %v", err)
@@ -64,27 +67,55 @@ func (h *Handler) Messages(w http.ResponseWriter, r *http.Request) {
 	requestID := generateRequestID()
 	startTime := time.Now()
 
-	// Create request log
+	// Use model router to determine provider and route the request
+	decision, err := h.modelRouter.DetermineRoute(&req)
+	if err != nil {
+		log.Printf("❌ Error routing request: %v", err)
+		writeErrorResponse(w, "Failed to route request", http.StatusInternalServerError)
+		return
+	}
+
+	// Create request log with routing information
 	requestLog := &model.RequestLog{
-		RequestID:   requestID,
-		Timestamp:   time.Now().Format(time.RFC3339),
-		Method:      r.Method,
-		Endpoint:    "/v1/messages",
-		Headers:     SanitizeHeaders(r.Header),
-		Body:        req,
-		Model:       req.Model,
-		UserAgent:   r.Header.Get("User-Agent"),
-		ContentType: r.Header.Get("Content-Type"),
+		RequestID:     requestID,
+		Timestamp:     time.Now().Format(time.RFC3339),
+		Method:        r.Method,
+		Endpoint:      r.URL.Path,
+		Headers:       SanitizeHeaders(r.Header),
+		Body:          req,
+		Model:         decision.OriginalModel,
+		OriginalModel: decision.OriginalModel,
+		RoutedModel:   decision.TargetModel,
+		UserAgent:     r.Header.Get("User-Agent"),
+		ContentType:   r.Header.Get("Content-Type"),
 	}
 
 	if _, err := h.storageService.SaveRequest(requestLog); err != nil {
 		log.Printf("❌ Error saving request: %v", err)
 	}
 
-	// Forward the request to Anthropic
-	resp, err := h.anthropicService.ForwardRequest(r.Context(), r)
+	// If the model was changed by routing, update the request body
+	if decision.TargetModel != decision.OriginalModel {
+		req.Model = decision.TargetModel
+
+		// Re-marshal the request with the updated model
+		updatedBodyBytes, err := json.Marshal(req)
+		if err != nil {
+			log.Printf("❌ Error marshaling updated request: %v", err)
+			writeErrorResponse(w, "Failed to process request", http.StatusInternalServerError)
+			return
+		}
+
+		// Update the request body
+		r.Body = io.NopCloser(bytes.NewReader(updatedBodyBytes))
+		r.ContentLength = int64(len(updatedBodyBytes))
+		r.Header.Set("Content-Length", fmt.Sprintf("%d", len(updatedBodyBytes)))
+	}
+
+	// Forward the request to the selected provider
+	resp, err := decision.Provider.ForwardRequest(r.Context(), r)
 	if err != nil {
-		log.Printf("❌ Error forwarding to Anthropic API: %v", err)
+		log.Printf("❌ Error forwarding to %s API: %v", decision.Provider.Name(), err)
 		writeErrorResponse(w, "Failed to forward request", http.StatusInternalServerError)
 		return
 	}
@@ -99,7 +130,6 @@ func (h *Handler) Messages(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Models(w http.ResponseWriter, r *http.Request) {
-	log.Println("📋 Models list requested")
 
 	response := &model.ModelsResponse{
 		Object: "list",
@@ -140,7 +170,7 @@ func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) UI(w http.ResponseWriter, r *http.Request) {
 	htmlContent, err := os.ReadFile("index.html")
 	if err != nil {
-		log.Printf("❌ Error reading index.html: %v", err)
+		// Error reading index.html
 		http.Error(w, "UI not available", http.StatusNotFound)
 		return
 	}
@@ -166,8 +196,6 @@ func (h *Handler) GetRequests(w http.ResponseWriter, r *http.Request) {
 		modelFilter = "all"
 	}
 
-	log.Printf("📊 GetRequests called - page: %d, limit: %d, modelFilter: %s", page, limit, modelFilter)
-
 	// Get all requests with model filter applied at storage level
 	allRequests, err := h.storageService.GetAllRequests(modelFilter)
 	if err != nil {
@@ -175,8 +203,6 @@ func (h *Handler) GetRequests(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to get requests", http.StatusInternalServerError)
 		return
 	}
-
-	log.Printf("📊 Got %d requests from storage (filter: %s)", len(allRequests), modelFilter)
 
 	// Convert pointers to values for consistency
 	requests := make([]model.RequestLog, len(allRequests))
@@ -201,8 +227,6 @@ func (h *Handler) GetRequests(w http.ResponseWriter, r *http.Request) {
 		requests = requests[start:end]
 	}
 
-	log.Printf("📊 Returning %d requests after pagination", len(requests))
-
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(struct {
 		Requests []model.RequestLog `json:"requests"`
@@ -214,16 +238,13 @@ func (h *Handler) GetRequests(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) DeleteRequests(w http.ResponseWriter, r *http.Request) {
-	log.Println("🗑️ Clearing request history")
 
 	clearedCount, err := h.storageService.ClearRequests()
 	if err != nil {
-		log.Printf("❌ Error clearing requests: %v", err)
+		log.Printf("Error clearing requests: %v", err)
 		writeErrorResponse(w, "Error clearing request history", http.StatusInternalServerError)
 		return
 	}
-
-	log.Printf("✅ Deleted %d request files", clearedCount)
 
 	response := map[string]interface{}{
 		"message": "Request history cleared",
@@ -238,7 +259,6 @@ func (h *Handler) NotFound(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleStreamingResponse(w http.ResponseWriter, resp *http.Response, requestLog *model.RequestLog, startTime time.Time) {
-	log.Println("🌊 Streaming response detected, forwarding stream...")
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -298,7 +318,7 @@ func (h *Handler) handleStreamingResponse(w http.ResponseWriter, resp *http.Resp
 			continue
 		}
 
-		// Capture usage data and metadata from message_start event
+		// Capture metadata from message_start event
 		if eventType, ok := genericEvent["type"].(string); ok && eventType == "message_start" {
 			if message, ok := genericEvent["message"].(map[string]interface{}); ok {
 				// Capture message metadata
@@ -311,51 +331,40 @@ func (h *Handler) handleStreamingResponse(w http.ResponseWriter, resp *http.Resp
 				if reason, ok := message["stop_reason"].(string); ok {
 					stopReason = reason
 				}
-
-				// Capture initial usage data from message_start
-				if usage, ok := message["usage"].(map[string]interface{}); ok {
-					finalUsage = &model.AnthropicUsage{}
-					if inputTokens, ok := usage["input_tokens"].(float64); ok {
-						finalUsage.InputTokens = int(inputTokens)
-					}
-					if outputTokens, ok := usage["output_tokens"].(float64); ok {
-						finalUsage.OutputTokens = int(outputTokens)
-					}
-					if cacheCreation, ok := usage["cache_creation_input_tokens"].(float64); ok {
-						finalUsage.CacheCreationInputTokens = int(cacheCreation)
-					}
-					if cacheRead, ok := usage["cache_read_input_tokens"].(float64); ok {
-						finalUsage.CacheReadInputTokens = int(cacheRead)
-					}
-					if tier, ok := usage["service_tier"].(string); ok {
-						finalUsage.ServiceTier = tier
-					}
-					log.Printf("📊 Captured initial usage from message_start: %+v", finalUsage)
-				} else {
-					log.Printf("⚠️ No usage data found in message_start event")
-				}
 			}
 		}
 
-		// Update output tokens from message_delta event
+		// Capture usage data from message_delta event
 		if eventType, ok := genericEvent["type"].(string); ok && eventType == "message_delta" {
 			// Usage is at top level for message_delta events
 			if usage, ok := genericEvent["usage"].(map[string]interface{}); ok {
-				if finalUsage != nil {
-					if outputTokens, ok := usage["output_tokens"].(float64); ok {
-						finalUsage.OutputTokens = int(outputTokens)
-						log.Printf("📊 Updated output tokens from message_delta: %d", int(outputTokens))
-					}
-				} else {
-					log.Printf("⚠️ finalUsage is nil when trying to update from message_delta usage")
+				// Create finalUsage if it doesn't exist yet
+				if finalUsage == nil {
+					finalUsage = &model.AnthropicUsage{}
 				}
+
+				// Capture all usage fields
+				if inputTokens, ok := usage["input_tokens"].(float64); ok {
+					finalUsage.InputTokens = int(inputTokens)
+				}
+				if outputTokens, ok := usage["output_tokens"].(float64); ok {
+					finalUsage.OutputTokens = int(outputTokens)
+				}
+				if cacheCreation, ok := usage["cache_creation_input_tokens"].(float64); ok {
+					finalUsage.CacheCreationInputTokens = int(cacheCreation)
+				}
+				if cacheRead, ok := usage["cache_read_input_tokens"].(float64); ok {
+					finalUsage.CacheReadInputTokens = int(cacheRead)
+				}
+
 			}
 		}
 
 		// Parse as structured event for content processing
 		var event model.StreamingEvent
 		if err := json.Unmarshal([]byte(jsonData), &event); err != nil {
-			continue // Skip if structured parsing fails, but we already got the usage data above
+			// Skip if structured parsing fails, but we already got the usage data above
+			continue
 		}
 
 		switch event.Type {
@@ -409,9 +418,6 @@ func (h *Handler) handleStreamingResponse(w http.ResponseWriter, resp *http.Resp
 	// Add usage data if we captured it
 	if finalUsage != nil {
 		responseBody["usage"] = finalUsage
-		log.Printf("📊 Final usage data being stored: %+v", finalUsage)
-	} else {
-		log.Printf("⚠️ No usage data captured for streaming response - finalUsage is nil")
 	}
 
 	// Marshal to JSON for storage
@@ -436,20 +442,11 @@ func (h *Handler) handleStreamingResponse(w http.ResponseWriter, resp *http.Resp
 }
 
 func (h *Handler) handleNonStreamingResponse(w http.ResponseWriter, resp *http.Response, requestLog *model.RequestLog, startTime time.Time) {
-	// Log response headers for debugging
-	log.Printf("📋 Response headers: Content-Encoding=%s, Content-Type=%s, Status=%d",
-		resp.Header.Get("Content-Encoding"), resp.Header.Get("Content-Type"), resp.StatusCode)
-
 	responseBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		log.Printf("❌ Error reading Anthropic response: %v", err)
 		writeErrorResponse(w, "Failed to read response", http.StatusInternalServerError)
 		return
-	}
-
-	// Log first few bytes to help debug compression issues
-	if len(responseBytes) > 0 {
-		log.Printf("📊 Response body starts with: %x (first 10 bytes)", responseBytes[:min(10, len(responseBytes))])
 	}
 
 	responseLog := &model.ResponseLog{
@@ -466,7 +463,6 @@ func (h *Handler) handleNonStreamingResponse(w http.ResponseWriter, resp *http.R
 		if err := json.Unmarshal(responseBytes, &anthropicResp); err == nil {
 			// Successfully parsed - store the structured response
 			responseLog.Body = json.RawMessage(responseBytes)
-			log.Printf("✅ Successfully parsed Anthropic response")
 		} else {
 			// If parsing fails, store as text but log the error
 			log.Printf("⚠️ Failed to parse Anthropic response: %v", err)
@@ -491,7 +487,6 @@ func (h *Handler) handleNonStreamingResponse(w http.ResponseWriter, resp *http.R
 		return
 	}
 
-	log.Println("✅ Successfully forwarded request to Anthropic API")
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(responseBytes)
 }
@@ -597,7 +592,6 @@ func extractTextFromMessage(message json.RawMessage) string {
 // Conversation handlers
 
 func (h *Handler) GetConversations(w http.ResponseWriter, r *http.Request) {
-	log.Println("📚 Getting conversations from Claude projects")
 
 	conversations, err := h.conversationService.GetConversations()
 	if err != nil {
@@ -687,8 +681,6 @@ func (h *Handler) GetConversationByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("📖 Getting conversation %s from project %s", sessionID, projectPath)
-
 	conversation, err := h.conversationService.GetConversation(projectPath, sessionID)
 	if err != nil {
 		log.Printf("❌ Error getting conversation: %v", err)
@@ -705,8 +697,6 @@ func (h *Handler) GetConversationsByProject(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "Project path is required", http.StatusBadRequest)
 		return
 	}
-
-	log.Printf("📁 Getting conversations for project %s", projectPath)
 
 	conversations, err := h.conversationService.GetConversationsByProject(projectPath)
 	if err != nil {

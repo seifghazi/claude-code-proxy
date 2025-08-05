@@ -30,29 +30,29 @@ func NewConversationService() ConversationService {
 
 // ConversationMessage represents a single message in a Claude conversation
 type ConversationMessage struct {
-	ParentUUID  *string                `json:"parentUuid"`
-	IsSidechain bool                   `json:"isSidechain"`
-	UserType    string                 `json:"userType"`
-	CWD         string                 `json:"cwd"`
-	SessionID   string                 `json:"sessionId"`
-	Version     string                 `json:"version"`
-	Type        string                 `json:"type"`
-	Message     json.RawMessage        `json:"message"`
-	UUID        string                 `json:"uuid"`
-	Timestamp   string                 `json:"timestamp"`
-	ParsedTime  time.Time              `json:"-"`
+	ParentUUID  *string         `json:"parentUuid"`
+	IsSidechain bool            `json:"isSidechain"`
+	UserType    string          `json:"userType"`
+	CWD         string          `json:"cwd"`
+	SessionID   string          `json:"sessionId"`
+	Version     string          `json:"version"`
+	Type        string          `json:"type"`
+	Message     json.RawMessage `json:"message"`
+	UUID        string          `json:"uuid"`
+	Timestamp   string          `json:"timestamp"`
+	ParsedTime  time.Time       `json:"-"`
 }
 
 // Conversation represents a complete conversation session
 type Conversation struct {
-	SessionID    string                  `json:"sessionId"`
-	ProjectPath  string                  `json:"projectPath"`
-	ProjectName  string                  `json:"projectName"`
-	Messages     []*ConversationMessage  `json:"messages"`
-	StartTime    time.Time               `json:"startTime"`
-	EndTime      time.Time               `json:"endTime"`
-	MessageCount int                     `json:"messageCount"`
-	FileModTime  time.Time               `json:"-"` // Used for sorting, not exported
+	SessionID    string                 `json:"sessionId"`
+	ProjectPath  string                 `json:"projectPath"`
+	ProjectName  string                 `json:"projectName"`
+	Messages     []*ConversationMessage `json:"messages"`
+	StartTime    time.Time              `json:"startTime"`
+	EndTime      time.Time              `json:"endTime"`
+	MessageCount int                    `json:"messageCount"`
+	FileModTime  time.Time              `json:"-"` // Used for sorting, not exported
 }
 
 // GetConversations returns all conversations organized by project
@@ -74,7 +74,7 @@ func (cs *conversationService) GetConversations() (map[string][]*Conversation, e
 		// Get the project path relative to claudeProjectsPath
 		projectDir := filepath.Dir(path)
 		projectRelPath, _ := filepath.Rel(cs.claudeProjectsPath, projectDir)
-		
+
 		// Skip files directly in the projects directory
 		if projectRelPath == "." || projectRelPath == "" {
 			return nil
@@ -99,18 +99,7 @@ func (cs *conversationService) GetConversations() (map[string][]*Conversation, e
 		return nil, fmt.Errorf("failed to walk claude projects: %w", err)
 	}
 
-	// Log any parsing errors encountered
-	if len(parseErrors) > 0 {
-		fmt.Printf("Warning: Encountered %d parsing errors while loading conversations:\n", len(parseErrors))
-		for i, err := range parseErrors {
-			if i < 5 { // Only show first 5 errors to avoid spam
-				fmt.Printf("  - %s\n", err)
-			}
-		}
-		if len(parseErrors) > 5 {
-			fmt.Printf("  ... and %d more errors\n", len(parseErrors)-5)
-		}
-	}
+	// Some parsing errors may have occurred but were handled
 
 	// Sort conversations within each project by file modification time (newest first)
 	for project := range conversations {
@@ -125,7 +114,7 @@ func (cs *conversationService) GetConversations() (map[string][]*Conversation, e
 // GetConversation returns a specific conversation by project and session ID
 func (cs *conversationService) GetConversation(projectPath, sessionID string) (*Conversation, error) {
 	filePath := filepath.Join(cs.claudeProjectsPath, projectPath, sessionID+".jsonl")
-	
+
 	conv, err := cs.parseConversationFile(filePath, projectPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse conversation: %w", err)
@@ -175,7 +164,7 @@ func (cs *conversationService) parseConversationFile(filePath, projectPath strin
 	if err != nil {
 		return nil, fmt.Errorf("failed to stat file: %w", err)
 	}
-	
+
 	file, err := os.Open(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file: %w", err)
@@ -185,9 +174,9 @@ func (cs *conversationService) parseConversationFile(filePath, projectPath strin
 	var messages []*ConversationMessage
 	var parseErrors int
 	lineNum := 0
-	
+
 	scanner := bufio.NewScanner(file)
-	
+
 	// Increase buffer size for large messages
 	const maxScanTokenSize = 10 * 1024 * 1024 // 10MB
 	buf := make([]byte, maxScanTokenSize)
@@ -196,18 +185,18 @@ func (cs *conversationService) parseConversationFile(filePath, projectPath strin
 	for scanner.Scan() {
 		lineNum++
 		line := scanner.Bytes()
-		
+
 		// Skip empty lines
 		if len(line) == 0 {
 			continue
 		}
-		
+
 		var msg ConversationMessage
 		if err := json.Unmarshal(line, &msg); err != nil {
 			parseErrors++
 			// Log only first few errors to avoid spam
 			if parseErrors <= 3 {
-				fmt.Printf("Warning: Failed to parse line %d in %s: %v\n", lineNum, filePath, err)
+				// Skip malformed line
 			}
 			continue
 		}
@@ -219,7 +208,7 @@ func (cs *conversationService) parseConversationFile(filePath, projectPath strin
 				// Try alternative timestamp formats
 				parsedTime, err = time.Parse(time.RFC3339Nano, msg.Timestamp)
 				if err != nil {
-					fmt.Printf("Warning: Failed to parse timestamp '%s' in %s\n", msg.Timestamp, filePath)
+					// Skip message with invalid timestamp
 				}
 			}
 			msg.ParsedTime = parsedTime
@@ -233,7 +222,7 @@ func (cs *conversationService) parseConversationFile(filePath, projectPath strin
 	}
 
 	if parseErrors > 3 {
-		fmt.Printf("Warning: Total of %d lines failed to parse in %s\n", parseErrors, filePath)
+		// Some lines failed to parse but were skipped
 	}
 
 	// Return empty conversation if no messages (caller can decide what to do)

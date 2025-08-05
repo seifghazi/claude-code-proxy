@@ -15,6 +15,7 @@ import (
 	"github.com/seifghazi/claude-code-monitor/internal/config"
 	"github.com/seifghazi/claude-code-monitor/internal/handler"
 	"github.com/seifghazi/claude-code-monitor/internal/middleware"
+	"github.com/seifghazi/claude-code-monitor/internal/provider"
 	"github.com/seifghazi/claude-code-monitor/internal/service"
 )
 
@@ -26,6 +27,15 @@ func main() {
 		logger.Fatalf("❌ Failed to load configuration: %v", err)
 	}
 
+	// Initialize providers
+	providers := make(map[string]provider.Provider)
+	providers["anthropic"] = provider.NewAnthropicProvider(&cfg.Providers.Anthropic)
+	providers["openai"] = provider.NewOpenAIProvider(&cfg.Providers.OpenAI)
+
+	// Initialize model router
+	modelRouter := service.NewModelRouter(cfg, providers, logger)
+
+	// Use legacy anthropic service for backward compatibility
 	anthropicService := service.NewAnthropicService(&cfg.Anthropic)
 
 	// Use SQLite storage
@@ -35,7 +45,7 @@ func main() {
 	}
 	logger.Println("🗿 SQLite database ready")
 
-	h := handler.New(anthropicService, storageService, logger)
+	h := handler.New(anthropicService, storageService, logger, modelRouter)
 
 	r := mux.NewRouter()
 
@@ -73,16 +83,12 @@ func main() {
 	go func() {
 		logger.Printf("🚀 Claude Code Monitor Server running on http://localhost:%s", cfg.Server.Port)
 		logger.Printf("📡 API endpoints available at:")
-		logger.Printf("   - POST http://localhost:%s/v1/chat/completions (OpenAI format)", cfg.Server.Port)
 		logger.Printf("   - POST http://localhost:%s/v1/messages (Anthropic format)", cfg.Server.Port)
 		logger.Printf("   - GET  http://localhost:%s/v1/models", cfg.Server.Port)
 		logger.Printf("   - GET  http://localhost:%s/health", cfg.Server.Port)
-		logger.Printf("   - POST http://localhost:%s/api/grade-prompt (Prompt grading)", cfg.Server.Port)
 		logger.Printf("🎨 Web UI available at:")
 		logger.Printf("   - GET  http://localhost:%s/ (Request Visualizer)", cfg.Server.Port)
 		logger.Printf("   - GET  http://localhost:%s/api/requests (Request API)", cfg.Server.Port)
-		logger.Printf("🔍 All requests logged with comprehensive error handling")
-		logger.Printf("🎯 Auto prompt grading with Anthropic best practices")
 
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Fatalf("❌ Server failed to start: %v", err)

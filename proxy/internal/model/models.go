@@ -25,17 +25,19 @@ type CriteriaScore struct {
 }
 
 type RequestLog struct {
-	RequestID   string              `json:"requestId"`
-	Timestamp   string              `json:"timestamp"`
-	Method      string              `json:"method"`
-	Endpoint    string              `json:"endpoint"`
-	Headers     map[string][]string `json:"headers"`
-	Body        interface{}         `json:"body"`
-	Model       string              `json:"model,omitempty"`
-	UserAgent   string              `json:"userAgent"`
-	ContentType string              `json:"contentType"`
-	PromptGrade *PromptGrade        `json:"promptGrade,omitempty"`
-	Response    *ResponseLog        `json:"response,omitempty"`
+	RequestID     string              `json:"requestId"`
+	Timestamp     string              `json:"timestamp"`
+	Method        string              `json:"method"`
+	Endpoint      string              `json:"endpoint"`
+	Headers       map[string][]string `json:"headers"`
+	Body          interface{}         `json:"body"`
+	Model         string              `json:"model,omitempty"`
+	OriginalModel string              `json:"originalModel,omitempty"`
+	RoutedModel   string              `json:"routedModel,omitempty"`
+	UserAgent     string              `json:"userAgent"`
+	ContentType   string              `json:"contentType"`
+	PromptGrade   *PromptGrade        `json:"promptGrade,omitempty"`
+	Response      *ResponseLog        `json:"response,omitempty"`
 }
 
 type ResponseLog struct {
@@ -129,14 +131,9 @@ type Tool struct {
 }
 
 type InputSchema struct {
-	Type       string              `json:"type"`
-	Properties map[string]Property `json:"properties"`
-	Required   []string            `json:"required,omitempty"`
-}
-
-type Property struct {
-	Type        string `json:"type"`
-	Description string `json:"description"`
+	Type       string                 `json:"type"`
+	Properties map[string]interface{} `json:"properties"`
+	Required   []string               `json:"required,omitempty"`
 }
 
 type AnthropicRequest struct {
@@ -147,6 +144,7 @@ type AnthropicRequest struct {
 	System      []AnthropicSystemMessage `json:"system,omitempty"`
 	Stream      bool                     `json:"stream,omitempty"`
 	Tools       []Tool                   `json:"tools,omitempty"`
+	ToolChoice  interface{}              `json:"tool_choice,omitempty"`
 }
 
 type ModelsResponse struct {

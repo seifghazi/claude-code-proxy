@@ -108,18 +108,6 @@ export function ConversationThread({ conversation }: ConversationThreadProps) {
 
   const messages = analyzeConversationFlow();
 
-  // Debug logging to identify assistant response issues
-  console.log('Conversation Debug:', {
-    messageCount: conversation.messageCount,
-    totalMessages: messages.length,
-    messages: messages.map(m => ({ 
-      role: m.role, 
-      contentPreview: JSON.stringify(m.content)?.substring(0, 50),
-      turn: m.turnNumber,
-      ts: m.timestamp,
-    })),
-  });
-
   if (messages.length === 0) {
     return (
       <div className="text-center py-12">

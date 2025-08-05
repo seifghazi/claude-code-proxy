@@ -1,4 +1,4 @@
-.PHONY: all build run clean install dev
+.PHONY: all build run clean install dev 
 
 # Default target
 all: install build

@@ -2,18 +2,20 @@
 
 ![Claude Code Proxy Demo](demo.gif)
 
-A dual-purpose monitoring solution that serves as both a proxy for Claude Code requests and a visualization dashboard for your Claude API conversations.
+A transparent proxy for capturing and visualizing in-flight Claude Code requests and conversations, with optional agent routing to different LLM providers.
 
 ## What It Does
 
-Claude Code Proxy serves two main purposes:
+Claude Code Proxy serves three main purposes:
 
 1. **Claude Code Proxy**: Intercepts and monitors requests from Claude Code (claude.ai/code) to the Anthropic API, allowing you to see what Claude Code is doing in real-time
 2. **Conversation Viewer**: Displays and analyzes your Claude API conversations with a beautiful web interface
+3. **Agent Routing (Optional)**: Routes specific Claude Code agents to different LLM providers (e.g., route code-reviewer agent to GPT-4o)
 
 ## Features
 
 - **Transparent Proxy**: Routes Claude Code requests through the monitor without disruption
+- **Agent Routing (Optional)**: Map specific Claude Code agents to different LLM models
 - **Request Monitoring**: SQLite-based logging of all API interactions
 - **Live Dashboard**: Real-time visualization of requests and responses
 - **Conversation Analysis**: View full conversation threads with tool usage
@@ -36,20 +38,15 @@ Claude Code Proxy serves two main purposes:
    cd claude-code-proxy
    ```
 
-2. **Set up your environment variables**
+2. **Configure the proxy**
    ```bash
-   cp .env.example .env
+   cp config.yaml.example config.yaml
    ```
 
 3. **Install and run** (first time)
    ```bash
    make install  # Install all dependencies
    make dev      # Start both services
-   ```
-   
-   Or use the script that does both:
-   ```bash
-   ./run.sh
    ```
 
 4. **Subsequent runs** (after initial setup)
@@ -154,15 +151,86 @@ make help       # Show all commands
 
 ## Configuration
 
-### Local Development
-Create a `.env` file with:
-```
-PORT=3001
-DB_PATH=requests.db
-ANTHROPIC_FORWARD_URL=https://api.anthropic.com
+### Basic Setup
+
+Create a `config.yaml` file (or copy from `config.yaml.example`):
+```yaml
+server:
+  port: 3001
+
+providers:
+  anthropic:
+    base_url: "https://api.anthropic.com"
+    
+  openai: # if enabling subagent routing
+    api_key: "your-openai-key"  # Or set OPENAI_API_KEY env var
+
+storage:
+  db_path: "requests.db"
 ```
 
-See `.env.example` for all available options.
+### Subagent Configuration (Optional)
+
+The proxy supports routing specific Claude Code agents to different LLM providers. This is an **optional** feature that's disabled by default.
+
+#### Enabling Subagent Routing
+
+1. **Enable the feature** in `config.yaml`:
+```yaml
+subagents:
+  enable: true  # Set to true to enable subagent routing
+  mappings:
+    code-reviewer: "gpt-4o"
+    data-analyst: "o3"
+    doc-writer: "gpt-3.5-turbo"
+```
+
+2. **Set up your Claude Code agents** following Anthropic's official documentation:
+   - 📖 **[Claude Code Subagents Documentation](https://docs.anthropic.com/en/docs/claude-code/sub-agents)**
+
+3. **How it works**: When Claude Code uses a subagent that matches one of your mappings, the proxy will automatically route the request to the specified model instead of Claude.
+
+### Practical Examples
+
+**Example 1: Code Review Agent → GPT-4o**
+```yaml
+# config.yaml
+subagents:
+  enable: true
+  mappings:
+    code-reviewer: "gpt-4o"
+```
+Use case: Route code review tasks to GPT-4o for faster responses while keeping complex coding tasks on Claude.
+
+**Example 2: Reasoning Agent → O3**  
+```yaml
+# config.yaml
+subagents:
+  enable: true
+  mappings:
+    deep-reasoning: "o3"
+```
+Use case: Send complex reasoning tasks to O3 while using Claude for general coding.
+
+**Example 3: Multiple Agents**
+```yaml
+# config.yaml
+subagents:
+  enable: true
+  mappings:
+    streaming-systems-engineer: "o3"
+    frontend-developer: "gpt-4o-mini"
+    security-auditor: "gpt-4o"
+```
+Use case: Different specialists for different tasks, optimizing for speed/cost/quality.
+
+### Environment Variables
+
+Override config via environment:
+- `PORT` - Server port
+- `OPENAI_API_KEY` - OpenAI API key
+- `DB_PATH` - Database path
+- `SUBAGENT_MAPPINGS` - Comma-separated mappings (e.g., `"code-reviewer:gpt-4o,data-analyst:o3"`)
 
 ### Docker Environment Variables
 
@@ -215,12 +283,6 @@ claude-code-proxy/
 - Searchable request history
 - Request/response body inspection
 - Conversation threading
-
-### Prompt Analysis
-- Automatic prompt grading
-- Best practices evaluation
-- Complexity assessment
-- Response quality metrics
 
 ### Web Dashboard
 - Real-time request streaming

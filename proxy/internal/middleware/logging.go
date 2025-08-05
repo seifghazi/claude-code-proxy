@@ -3,11 +3,10 @@ package middleware
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/seifghazi/claude-code-monitor/internal/model"
@@ -16,11 +15,10 @@ import (
 func Logging(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		log.Printf("%s - %s %s", start.Format(time.RFC3339), r.Method, r.URL.Path)
-		log.Printf("Headers: %s", formatHeaders(r.Header))
 
+		// For POST requests with body, read and store the bytes
 		var bodyBytes []byte
-		if r.Body != nil {
+		if r.Body != nil && (r.Method == "POST" || r.Method == "PUT" || r.Method == "PATCH") {
 			var err error
 			bodyBytes, err = io.ReadAll(r.Body)
 			if err != nil {
@@ -30,62 +28,27 @@ func Logging(next http.Handler) http.Handler {
 			}
 			r.Body.Close()
 			r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-		}
 
-		ctx := context.WithValue(r.Context(), model.BodyBytesKey, bodyBytes)
-		r = r.WithContext(ctx)
-
-		log.Printf("Body length: %d bytes", len(bodyBytes))
-		if len(bodyBytes) > 0 {
-			logRequestBody(bodyBytes)
+			// Store raw bytes in context for handler to use
+			ctx := context.WithValue(r.Context(), model.BodyBytesKey, bodyBytes)
+			r = r.WithContext(ctx)
 		}
-		log.Println("---")
 
 		wrapped := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
 		next.ServeHTTP(wrapped, r)
 
 		duration := time.Since(start)
-		log.Printf("Response: %d %s (took %v)", wrapped.statusCode, http.StatusText(wrapped.statusCode), duration)
+		statusColor := getStatusColor(wrapped.statusCode)
+
+		log.Printf("%s %s %s%d%s %s (%s)",
+			r.Method,
+			r.URL.Path,
+			statusColor,
+			wrapped.statusCode,
+			colorReset,
+			http.StatusText(wrapped.statusCode),
+			formatDuration(duration))
 	})
-}
-
-func formatHeaders(headers http.Header) string {
-	headerMap := make(map[string][]string)
-	for k, v := range headers {
-		headerMap[k] = sanitizeHeaderValue(k, v)
-	}
-	headerBytes, _ := json.MarshalIndent(headerMap, "", "  ")
-	return string(headerBytes)
-}
-
-func sanitizeHeaderValue(key string, values []string) []string {
-	lowerKey := strings.ToLower(key)
-	sensitiveHeaders := []string{
-		"x-api-key",
-		"api-key",
-		"authorization",
-		"anthropic-api-key",
-		"openai-api-key",
-		"bearer",
-	}
-
-	for _, sensitive := range sensitiveHeaders {
-		if strings.Contains(lowerKey, sensitive) {
-			return []string{"[REDACTED]"}
-		}
-	}
-	return values
-}
-
-func logRequestBody(bodyBytes []byte) {
-	var bodyJSON interface{}
-	if err := json.Unmarshal(bodyBytes, &bodyJSON); err == nil {
-		bodyStr, _ := json.MarshalIndent(bodyJSON, "", "  ")
-		log.Printf("Body: %s", string(bodyStr))
-	} else {
-		log.Printf("❌ Failed to parse body as JSON: %v", err)
-		log.Printf("Raw body: %s", string(bodyBytes))
-	}
 }
 
 type responseWriter struct {
@@ -96,4 +59,38 @@ type responseWriter struct {
 func (rw *responseWriter) WriteHeader(code int) {
 	rw.statusCode = code
 	rw.ResponseWriter.WriteHeader(code)
+}
+
+// ANSI color codes
+const (
+	colorReset  = "\033[0m"
+	colorGreen  = "\033[32m"
+	colorYellow = "\033[33m"
+	colorRed    = "\033[31m"
+	colorBlue   = "\033[34m"
+	colorCyan   = "\033[36m"
+)
+
+func getStatusColor(status int) string {
+	switch {
+	case status >= 200 && status < 300:
+		return colorGreen
+	case status >= 300 && status < 400:
+		return colorBlue
+	case status >= 400 && status < 500:
+		return colorYellow
+	case status >= 500:
+		return colorRed
+	default:
+		return colorReset
+	}
+}
+
+func formatDuration(d time.Duration) string {
+	if d < time.Millisecond {
+		return fmt.Sprintf("%dµs", d.Microseconds())
+	} else if d < time.Second {
+		return fmt.Sprintf("%dms", d.Milliseconds())
+	}
+	return fmt.Sprintf("%.2fs", d.Seconds())
 }
