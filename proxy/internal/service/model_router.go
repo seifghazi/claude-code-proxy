@@ -134,6 +134,7 @@ func (r *ModelRouter) loadCustomAgents() {
 			fmt.Sprintf("%s/.claude/agents/%s.md", os.Getenv("HOME"), agentName),
 		}
 
+		found := false
 		for _, path := range paths {
 			content, err := os.ReadFile(path)
 			if err != nil {
@@ -159,7 +160,16 @@ func (r *ModelRouter) loadCustomAgents() {
 					TargetProvider: providerName,
 					FullPrompt:     staticPrompt,
 				}
+				found = true
 				break
+			}
+		}
+
+		// Log warning if subagent is mapped but definition not found
+		if !found {
+			r.logger.Printf("⚠️  Subagent '%s' is mapped to '%s' but definition file not found in:\n", agentName, targetModel)
+			for _, path := range paths {
+				r.logger.Printf("      - %s\n", path)
 			}
 		}
 	}
