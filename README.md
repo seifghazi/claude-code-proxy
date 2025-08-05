@@ -2,15 +2,15 @@
 
 ![Claude Code Proxy Demo](demo.gif)
 
-A transparent proxy for Claude Code that monitors API requests, routes agents to different LLM providers, and provides a beautiful dashboard for analyzing conversations.
+A transparent proxy for capturing and visualizing in-flight Claude Code requests and conversations, with optional agent routing to different LLM providers.
 
 ## What It Does
 
 Claude Code Proxy serves three main purposes:
 
 1. **Claude Code Proxy**: Intercepts and monitors requests from Claude Code (claude.ai/code) to the Anthropic API, allowing you to see what Claude Code is doing in real-time
-2. **Agent Routing (Optional)**: Routes specific Claude Code agents to different LLM providers (e.g., route code-reviewer agent to GPT-4o)
-3. **Conversation Viewer**: Displays and analyzes your Claude API conversations with a beautiful web interface
+2. **Conversation Viewer**: Displays and analyzes your Claude API conversations with a beautiful web interface
+3. **Agent Routing (Optional)**: Routes specific Claude Code agents to different LLM providers (e.g., route code-reviewer agent to GPT-4o)
 
 ## Features
 
