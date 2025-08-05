@@ -34,6 +34,7 @@ import {
 
 import RequestDetailContent from "../components/RequestDetailContent";
 import { ConversationThread } from "../components/ConversationThread";
+import { getChatCompletionsEndpoint } from "../utils/models";
 
 export const meta: MetaFunction = () => {
   return [
@@ -697,7 +698,7 @@ export default function Index() {
                           
                           {/* Endpoint */}
                           <div className="text-xs text-gray-600 font-mono mb-1">
-                            {request.routedModel && request.routedModel.startsWith('gpt-') ? '/v1/chat/completions' : request.endpoint}
+                            {getChatCompletionsEndpoint(request.routedModel, request.endpoint)}
                           </div>
                           
                           {/* Metrics Row */}
