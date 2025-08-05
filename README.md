@@ -24,11 +24,13 @@ Claude Code Proxy serves three main purposes:
 ## Quick Start
 
 ### Prerequisites
-- Go 1.20+
-- Node.js 18+
+- **Option 1**: Go 1.20+ and Node.js 18+ (for local development)
+- **Option 2**: Docker (for containerized deployment)
 - Claude Code
 
 ### Installation
+
+#### Option 1: Local Development
 
 1. **Clone the repository**
    ```bash
@@ -54,7 +56,59 @@ Claude Code Proxy serves three main purposes:
    ./run.sh
    ```
 
-5. **Using with Claude Code**
+#### Option 2: Docker
+
+1. **Clone the repository**
+   ```bash
+   git clone https://github.com/seifghazi/claude-code-proxy.git
+   cd claude-code-proxy
+   ```
+
+2. **Build and run with Docker**
+   ```bash
+   # Build the image
+   docker build -t claude-code-proxy .
+   
+   # Run with default settings
+   docker run -p 3001:3001 -p 5173:5173 claude-code-proxy
+   ```
+
+3. **Run with persistent data and custom configuration**
+   ```bash
+   # Create a data directory for persistent SQLite database
+   mkdir -p ./data
+   
+   # Run with volume mount and custom environment variables
+   docker run -p 3001:3001 -p 5173:5173 \
+     -v ./data:/app/data \
+     -e ANTHROPIC_FORWARD_URL=https://api.anthropic.com \
+     -e PORT=3001 \
+     -e WEB_PORT=5173 \
+     claude-code-proxy
+   ```
+
+4. **Docker Compose (alternative)**
+   ```yaml
+   # docker-compose.yml
+   version: '3.8'
+   services:
+     claude-code-proxy:
+       build: .
+       ports:
+         - "3001:3001"
+         - "5173:5173"
+       volumes:
+         - ./data:/app/data
+       environment:
+         - ANTHROPIC_FORWARD_URL=https://api.anthropic.com
+         - PORT=3001
+         - WEB_PORT=5173
+         - DB_PATH=/app/data/requests.db
+   ```
+   
+   Then run: `docker-compose up`
+
+### Using with Claude Code
 
 To use this proxy with Claude Code, set:
 ```bash
@@ -177,6 +231,33 @@ Override config via environment:
 - `OPENAI_API_KEY` - OpenAI API key
 - `DB_PATH` - Database path
 - `SUBAGENT_MAPPINGS` - Comma-separated mappings (e.g., `"code-reviewer:gpt-4o,data-analyst:o3"`)
+
+### Docker Environment Variables
+
+All environment variables can be configured when running the Docker container:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | `3001` | Proxy server port |
+| `WEB_PORT` | `5173` | Web dashboard port |
+| `READ_TIMEOUT` | `600` | Server read timeout (seconds) |
+| `WRITE_TIMEOUT` | `600` | Server write timeout (seconds) |
+| `IDLE_TIMEOUT` | `600` | Server idle timeout (seconds) |
+| `ANTHROPIC_FORWARD_URL` | `https://api.anthropic.com` | Target Anthropic API URL |
+| `ANTHROPIC_VERSION` | `2023-06-01` | Anthropic API version |
+| `ANTHROPIC_MAX_RETRIES` | `3` | Maximum retry attempts |
+| `DB_PATH` | `/app/data/requests.db` | SQLite database path |
+
+Example with custom configuration:
+```bash
+docker run -p 3001:3001 -p 5173:5173 \
+  -v ./data:/app/data \
+  -e PORT=8080 \
+  -e WEB_PORT=3000 \
+  -e ANTHROPIC_FORWARD_URL=https://api.anthropic.com \
+  -e DB_PATH=/app/data/custom.db \
+  claude-code-proxy
+```
 
 
 ## Project Structure
