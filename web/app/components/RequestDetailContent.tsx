@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { MessageContent } from './MessageContent';
 import { formatJSON } from '../utils/formatters';
+import { getChatCompletionsEndpoint, getProviderName } from '../utils/models';
 
 interface Request {
   id: number;
@@ -152,7 +153,7 @@ export default function RequestDetailContent({ request, onGrade }: RequestDetail
             <div className="flex items-center space-x-3">
               <span className="text-gray-500 font-medium min-w-[80px]">Endpoint:</span>
               <code className="text-blue-600 bg-blue-50 px-2 py-1 rounded font-mono text-xs border border-blue-200">
-                {request.routedModel && request.routedModel.startsWith('gpt-') ? '/v1/chat/completions' : request.endpoint}
+                {getChatCompletionsEndpoint(request.routedModel, request.endpoint)}
               </code>
             </div>
           </div>
@@ -352,14 +353,14 @@ export default function RequestDetailContent({ request, onGrade }: RequestDetail
                             {request.routedModel}
                           </code>
                           <span className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded-full border border-blue-200">
-                            {request.routedModel.startsWith('gpt-') || request.routedModel.startsWith('o') ? 'OpenAI' : 'Anthropic'}
+                            {getProviderName(request.routedModel)}
                           </span>
                         </div>
                       </div>
                       <div className="text-right">
                         <div className="text-xs text-gray-500 mb-1">Target Endpoint</div>
                         <code className="text-xs bg-white px-2 py-1 rounded font-mono border border-gray-200">
-                          {request.routedModel.startsWith('gpt-') ? '/v1/chat/completions' : '/v1/messages'}
+                          {getChatCompletionsEndpoint(request.routedModel)}
                         </code>
                       </div>
                     </div>
