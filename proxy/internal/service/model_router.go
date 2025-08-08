@@ -64,6 +64,9 @@ func initializeModelProviderMap() map[string]string {
 
 	// OpenAI models
 	openaiModels := []string{
+		// GPT-5 family
+		"gpt-5", "gpt-5-mini", "gpt-5-nano",
+
 		// GPT-4.1 family
 		"gpt-4.1", "gpt-4.1-2025-04-14",
 		"gpt-4.1-mini", "gpt-4.1-mini-2025-04-14",
