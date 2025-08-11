@@ -31,6 +31,8 @@ func main() {
 	providers := make(map[string]provider.Provider)
 	providers["anthropic"] = provider.NewAnthropicProvider(&cfg.Providers.Anthropic)
 	providers["openai"] = provider.NewOpenAIProvider(&cfg.Providers.OpenAI)
+	providers["gemini"] = provider.NewGeminiProvider(&cfg.Providers.Gemini)
+	providers["openrouter"] = provider.NewOpenRouterProvider(&cfg.Providers.OpenRouter)
 
 	// Initialize model router
 	modelRouter := service.NewModelRouter(cfg, providers, logger)

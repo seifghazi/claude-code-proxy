@@ -32,11 +32,31 @@ providers:
   openai:
     # API key for OpenAI
     # Can also be set via OPENAI_API_KEY environment variable
-    # api_key: "..."
+    # api_key: "sk-..."
     
     # Base URL for OpenAI API (can be changed for custom endpoints)
     # Can also be set via OPENAI_BASE_URL environment variable
     # base_url: "https://api.openai.com"
+  
+  # Google Gemini configuration
+  gemini:
+    # API key for Google Gemini
+    # Can also be set via GEMINI_API_KEY environment variable
+    # api_key: "AIza..."
+    
+    # Base URL for Gemini API
+    # Can also be set via GEMINI_BASE_URL environment variable
+    # base_url: "https://generativelanguage.googleapis.com"
+  
+  # OpenRouter configuration
+  openrouter:
+    # API key for OpenRouter
+    # Can also be set via OPENROUTER_API_KEY environment variable
+    # api_key: "sk-or-v1-..."
+    
+    # Base URL for OpenRouter API
+    # Can also be set via OPENROUTER_BASE_URL environment variable
+    # base_url: "https://openrouter.ai/api"
 
 # Storage configuration
 storage:
@@ -56,14 +76,17 @@ subagents:
   # Maps subagent types to specific models
   # Only used when enable: true
   mappings:
-    # Code review specialist (example)
+    # Code review specialist - routes to OpenAI (example)
     # code-reviewer: "gpt-4o"
     
-    # Data analysis expert (example)
-    # data-analyst: "o3"
+    # Data analysis expert - routes to Gemini (example)
+    # data-analyst: "gemini-1.5-pro"
     
-    # Documentation writer (example)
-    # doc-writer: "gpt-3.5-turbo"
+    # Documentation writer - routes to OpenRouter (example)
+    # doc-writer: "openrouter/claude-3-haiku-20240307"
+    
+    # Deep reasoning specialist - routes to OpenRouter (example)
+    # deep-reasoning: "openrouter/o3-mini"
 
 # Environment variable overrides:
 # The following environment variables will override the YAML configuration:
@@ -82,6 +105,14 @@ subagents:
 # OpenAI:
 #   OPENAI_API_KEY           - OpenAI API key
 #   OPENAI_BASE_URL          - OpenAI base URL
+#
+# Gemini:
+#   GEMINI_API_KEY           - Google Gemini API key
+#   GEMINI_BASE_URL          - Gemini base URL
+#
+# OpenRouter:
+#   OPENROUTER_API_KEY       - OpenRouter API key
+#   OPENROUTER_BASE_URL      - OpenRouter base URL
 #
 # Storage:
 #   DB_PATH                  - Database file path
