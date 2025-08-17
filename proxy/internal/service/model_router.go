@@ -99,6 +99,7 @@ func initializeModelProviderMap() map[string]string {
 
 	// Anthropic models
 	anthropicModels := []string{
+		"claude-opus-4-1-20250805",
 		"claude-opus-4-20250514",
 		"claude-sonnet-4-20250514",
 		"claude-3-7-sonnet-20250219",
