@@ -82,39 +82,64 @@ export function CodeViewer({ code, fileName, language }: CodeViewerProps) {
 
   const detectedLanguage = language || getLanguageFromFileName(fileName);
 
-  // Basic syntax highlighting for common tokens
+  // Single-pass syntax highlighting to avoid corrupting HTML class attributes
   const highlightCode = (code: string): string => {
-    // Escape HTML
-    let highlighted = code
+    // Escape HTML helper
+    const escapeHtml = (str: string) => str
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;');
 
-    // Common patterns for many languages
-    const patterns = [
-      // Strings
-      { regex: /(["'`])(?:(?=(\\?))\2.)*?\1/g, class: 'text-green-400' },
-      // Comments
-      { regex: /(\/\/.*$)/gm, class: 'text-gray-500 italic' },
-      { regex: /(\/\*[\s\S]*?\*\/)/g, class: 'text-gray-500 italic' },
-      { regex: /(#.*$)/gm, class: 'text-gray-500 italic' },
-      // Numbers
-      { regex: /\b(\d+\.?\d*)\b/g, class: 'text-purple-400' },
-      // Keywords (common across many languages)
-      { regex: /\b(function|const|let|var|if|else|for|while|return|class|import|export|from|async|await|def|elif|except|finally|lambda|with|as|raise|del|global|nonlocal|assert|break|continue|try|catch|throw|new|this|super|extends|implements|interface|abstract|static|public|private|protected|void|int|string|boolean|float|double|char|long|short|byte|enum|struct|typedef|union|namespace|using|package|goto|switch|case|default)\b/g, class: 'text-blue-400' },
-      // Boolean and null values
-      { regex: /\b(true|false|null|undefined|nil|None|True|False)\b/g, class: 'text-orange-400' },
-      // Function calls (basic)
-      { regex: /(\w+)(?=\s*\()/g, class: 'text-yellow-400' },
-      // Types/Classes (PascalCase)
-      { regex: /\b([A-Z][a-zA-Z0-9]*)\b/g, class: 'text-cyan-400' },
+    // Define token patterns with priorities (first match wins)
+    // Order matters: strings and comments first to avoid highlighting inside them
+    const tokenPatterns = [
+      { regex: /(["'`])(?:(?=(\\?))\2.)*?\1/, className: 'text-green-400' },      // strings
+      { regex: /\/\/.*$/, className: 'text-gray-500 italic' },                     // single-line comments
+      { regex: /\/\*[\s\S]*?\*\//, className: 'text-gray-500 italic' },           // multi-line comments
+      { regex: /#.*$/, className: 'text-gray-500 italic' },                        // hash comments
+      { regex: /\b(function|const|let|var|if|else|for|while|return|class|import|export|from|async|await|def|elif|except|finally|lambda|with|as|raise|del|global|nonlocal|assert|break|continue|try|catch|throw|new|this|super|extends|implements|interface|abstract|static|public|private|protected|void|int|string|boolean|float|double|char|long|short|byte|enum|struct|typedef|union|namespace|using|package|goto|switch|case|default|fn|pub|mod|use|mut|match|loop|impl|trait|where|type|readonly|override)\b/, className: 'text-blue-400' }, // keywords
+      { regex: /\b(true|false|null|undefined|nil|None|True|False|NULL)\b/, className: 'text-orange-400' }, // literals
+      { regex: /\b\d+\.?\d*\b/, className: 'text-purple-400' },                    // numbers
+      { regex: /\b[A-Z][a-zA-Z0-9]*\b/, className: 'text-cyan-400' },              // PascalCase (types/classes)
     ];
 
-    patterns.forEach(({ regex, class: className }) => {
-      highlighted = highlighted.replace(regex, `<span class="${className}">$&</span>`);
-    });
+    // Build a combined regex that matches any token
+    const combinedPattern = new RegExp(
+      tokenPatterns.map(p => `(${p.regex.source})`).join('|'),
+      'gm'
+    );
 
-    return highlighted;
+    let result = '';
+    let lastIndex = 0;
+
+    // Single pass through the string
+    for (const match of code.matchAll(combinedPattern)) {
+      // Add non-matched text before this match (escaped)
+      if (match.index! > lastIndex) {
+        result += escapeHtml(code.slice(lastIndex, match.index));
+      }
+
+      // Find which pattern matched (first non-undefined capture group)
+      const matchedText = match[0];
+      let className = '';
+      for (let i = 0; i < tokenPatterns.length; i++) {
+        if (match[i + 1] !== undefined) {
+          className = tokenPatterns[i].className;
+          break;
+        }
+      }
+
+      // Add the highlighted token (escape the matched text too)
+      result += `<span class="${className}">${escapeHtml(matchedText)}</span>`;
+      lastIndex = match.index! + matchedText.length;
+    }
+
+    // Add remaining text after last match
+    if (lastIndex < code.length) {
+      result += escapeHtml(code.slice(lastIndex));
+    }
+
+    return result;
   };
 
   const handleCopy = async () => {
