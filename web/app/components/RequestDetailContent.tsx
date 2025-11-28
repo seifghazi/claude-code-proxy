@@ -77,7 +77,7 @@ interface Request {
 
 interface RequestDetailContentProps {
   request: Request;
-  onGrade: () => void;
+  onGrade?: () => void;
 }
 
 export default function RequestDetailContent({ request, onGrade }: RequestDetailContentProps) {

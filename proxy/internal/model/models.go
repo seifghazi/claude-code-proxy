@@ -40,6 +40,20 @@ type RequestLog struct {
 	Response      *ResponseLog        `json:"response,omitempty"`
 }
 
+// RequestSummary is a lightweight version of RequestLog for list views
+type RequestSummary struct {
+	RequestID     string          `json:"requestId"`
+	Timestamp     string          `json:"timestamp"`
+	Method        string          `json:"method"`
+	Endpoint      string          `json:"endpoint"`
+	Model         string          `json:"model,omitempty"`
+	OriginalModel string          `json:"originalModel,omitempty"`
+	RoutedModel   string          `json:"routedModel,omitempty"`
+	StatusCode    int             `json:"statusCode,omitempty"`
+	ResponseTime  int64           `json:"responseTime,omitempty"`
+	Usage         *AnthropicUsage `json:"usage,omitempty"`
+}
+
 type ResponseLog struct {
 	StatusCode      int                 `json:"statusCode"`
 	Headers         map[string][]string `json:"headers"`
