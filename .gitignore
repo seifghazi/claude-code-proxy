@@ -11,6 +11,8 @@ node_modules/
 # Database and logs
 requests/*
 requests.db
+requests.db-shm
+requests.db-wal
 *.log
 proxy.log
 
@@ -39,6 +41,7 @@ coverage/
 # Temporary files
 tmp/
 temp/
+.playwright-mcp/
 
 
 # Config
