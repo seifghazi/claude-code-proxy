@@ -342,19 +342,15 @@ func (s *sqliteStorageService) GetAllRequests(modelFilter string) ([]*model.Requ
 			&req.RoutedModel,
 		)
 		if err != nil {
-			// Error scanning row - skip
 			continue
 		}
 
-		// Unmarshal JSON fields
 		if err := json.Unmarshal([]byte(headersJSON), &req.Headers); err != nil {
-			// Error unmarshaling headers
 			continue
 		}
 
 		var body interface{}
 		if err := json.Unmarshal([]byte(bodyJSON), &body); err != nil {
-			// Error unmarshaling body
 			continue
 		}
 		req.Body = body
@@ -377,6 +373,71 @@ func (s *sqliteStorageService) GetAllRequests(modelFilter string) ([]*model.Requ
 	}
 
 	return requests, nil
+}
+
+// GetRequestsSummary returns minimal data for list view - no body/headers, only usage from response
+func (s *sqliteStorageService) GetRequestsSummary(modelFilter string) ([]*model.RequestSummary, error) {
+	query := `
+		SELECT id, timestamp, method, endpoint, model, original_model, routed_model, response
+		FROM requests
+	`
+	args := []interface{}{}
+
+	if modelFilter != "" && modelFilter != "all" {
+		query += " WHERE LOWER(model) LIKE ?"
+		args = append(args, "%"+strings.ToLower(modelFilter)+"%")
+	}
+
+	query += " ORDER BY timestamp DESC"
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query requests: %w", err)
+	}
+	defer rows.Close()
+
+	var summaries []*model.RequestSummary
+	for rows.Next() {
+		var s model.RequestSummary
+		var responseJSON sql.NullString
+
+		err := rows.Scan(
+			&s.RequestID,
+			&s.Timestamp,
+			&s.Method,
+			&s.Endpoint,
+			&s.Model,
+			&s.OriginalModel,
+			&s.RoutedModel,
+			&responseJSON,
+		)
+		if err != nil {
+			continue
+		}
+
+		// Only parse response to extract usage and status
+		if responseJSON.Valid {
+			var resp model.ResponseLog
+			if err := json.Unmarshal([]byte(responseJSON.String), &resp); err == nil {
+				s.StatusCode = resp.StatusCode
+				s.ResponseTime = resp.ResponseTime
+
+				// Extract usage from response body
+				if resp.Body != nil {
+					var respBody struct {
+						Usage *model.AnthropicUsage `json:"usage"`
+					}
+					if err := json.Unmarshal(resp.Body, &respBody); err == nil && respBody.Usage != nil {
+						s.Usage = respBody.Usage
+					}
+				}
+			}
+		}
+
+		summaries = append(summaries, &s)
+	}
+
+	return summaries, nil
 }
 
 func (s *sqliteStorageService) Close() error {

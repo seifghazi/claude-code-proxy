@@ -1,5 +1,6 @@
 import type { MetaFunction } from "@remix-run/node";
-import { useState, useEffect, useTransition } from "react";
+import { useState, useEffect, useTransition, useCallback, useRef } from "react";
+import { useWindowVirtualizer } from "@tanstack/react-virtual";
 import {
   Activity,
   RefreshCw,
@@ -47,8 +48,30 @@ export const meta: MetaFunction = () => {
   ];
 };
 
+// Lightweight summary for list view (fast loading)
+interface RequestSummary {
+  id: string;
+  requestId: string;
+  timestamp: string;
+  method: string;
+  endpoint: string;
+  model?: string;
+  originalModel?: string;
+  routedModel?: string;
+  statusCode?: number;
+  responseTime?: number;
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    cache_creation_input_tokens?: number;
+    cache_read_input_tokens?: number;
+  };
+}
+
+// Full request details (loaded on demand)
 interface Request {
   id: number;
+  requestId?: string;
   conversationId?: string;
   turnNumber?: number;
   isRoot?: boolean;
@@ -143,7 +166,9 @@ interface Conversation {
 }
 
 export default function Index() {
-  const [requests, setRequests] = useState<Request[]>([]);
+  const [requestSummaries, setRequestSummaries] = useState<RequestSummary[]>([]);
+  const [requestDetailsCache, setRequestDetailsCache] = useState<Map<string, Request>>(new Map());
+  const [fullRequestsLoaded, setFullRequestsLoaded] = useState(false);
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [selectedRequest, setSelectedRequest] = useState<Request | null>(null);
   const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null);
@@ -165,14 +190,15 @@ export default function Index() {
   const [selectedForCompare, setSelectedForCompare] = useState<Request[]>([]);
   const [isCompareModalOpen, setIsCompareModalOpen] = useState(false);
 
-  const loadRequests = async (filter?: string, loadMore = false) => {
+  // Load lightweight summaries for the list view (fast initial load)
+  const loadRequests = async (filter?: string) => {
     setIsFetching(true);
-    const pageToFetch = loadMore ? requestsCurrentPage + 1 : 1;
+    setFullRequestsLoaded(false);
+    setRequestDetailsCache(new Map());
     try {
       const currentModelFilter = filter || modelFilter;
-      const url = new URL('/api/requests', window.location.origin);
-      url.searchParams.append("page", pageToFetch.toString());
-      url.searchParams.append("limit", itemsPerPage.toString());
+      // Use summary endpoint - much faster, minimal data
+      const url = new URL('/api/requests/summary', window.location.origin);
       if (currentModelFilter !== "all") {
         url.searchParams.append("model", currentModelFilter);
       }
@@ -181,30 +207,78 @@ export default function Index() {
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
-      
+
       const data = await response.json();
       const requests = data.requests || [];
       const mappedRequests = requests.map((req: any, index: number) => ({
         ...req,
-        id: req.requestId ? `${req.requestId}_${index}` : `request_${index}` 
+        id: req.requestId || `request_${index}`
       }));
-      
+
       startTransition(() => {
-        if (loadMore) {
-          setRequests(prev => [...prev, ...mappedRequests]);
-        } else {
-          setRequests(mappedRequests);
-        }
-        setRequestsCurrentPage(pageToFetch);
-        setHasMoreRequests(mappedRequests.length === itemsPerPage);
+        setRequestSummaries(mappedRequests);
       });
+
+      // Preload full requests in background after summaries are loaded
+      preloadFullRequests(currentModelFilter);
     } catch (error) {
       console.error('Failed to load requests:', error);
       startTransition(() => {
-        setRequests([]);
+        setRequestSummaries([]);
       });
     } finally {
       setIsFetching(false);
+    }
+  };
+
+  // Preload full request data in background
+  const preloadFullRequests = async (currentModelFilter: string) => {
+    try {
+      const url = new URL('/api/requests', window.location.origin);
+      url.searchParams.append("limit", "10000");
+      if (currentModelFilter !== "all") {
+        url.searchParams.append("model", currentModelFilter);
+      }
+
+      const response = await fetch(url.toString());
+      if (!response.ok) return;
+
+      const data = await response.json();
+      const requests = data.requests || [];
+
+      // Build cache map
+      const cache = new Map<string, Request>();
+      requests.forEach((req: any) => {
+        if (req.requestId) {
+          cache.set(req.requestId, { ...req, id: req.requestId });
+        }
+      });
+
+      setRequestDetailsCache(cache);
+      setFullRequestsLoaded(true);
+    } catch (error) {
+      console.error('Failed to preload full requests:', error);
+    }
+  };
+
+  // Get full request details from cache or fetch on demand
+  const getRequestDetails = async (requestId: string): Promise<Request | null> => {
+    // Check cache first
+    if (requestDetailsCache.has(requestId)) {
+      return requestDetailsCache.get(requestId) || null;
+    }
+
+    // Fallback to fetch if not in cache yet
+    try {
+      const response = await fetch(`/api/requests?limit=10000`);
+      if (!response.ok) return null;
+
+      const data = await response.json();
+      const request = data.requests?.find((r: any) => r.requestId === requestId);
+      return request ? { ...request, id: request.requestId } : null;
+    } catch (error) {
+      console.error('Failed to load request details:', error);
+      return null;
     }
   };
 
@@ -266,7 +340,8 @@ export default function Index() {
       });
       
       if (response.ok) {
-        setRequests([]);
+        setRequestSummaries([]);
+        setRequestDetailsCache(new Map());
         setConversations([]);
         setRequestsCurrentPage(1);
         setHasMoreRequests(true);
@@ -275,14 +350,15 @@ export default function Index() {
       }
     } catch (error) {
       console.error('Failed to clear requests:', error);
-      setRequests([]);
+      setRequestSummaries([]);
+      setRequestDetailsCache(new Map());
     }
   };
 
   const filterRequests = (filter: string) => {
-    if (filter === 'all') return requests;
-    
-    return requests.filter(req => {
+    if (filter === 'all') return requestSummaries;
+
+    return requestSummaries.filter(req => {
       switch (filter) {
         case 'messages':
           return req.endpoint.includes('/messages');
@@ -351,8 +427,8 @@ export default function Index() {
     return parts.length > 0 ? parts.join(' • ') : '📡 API request';
   };
 
-  const showRequestDetails = (requestId: number) => {
-    const request = requests.find(r => r.id === requestId);
+  const showRequestDetails = async (requestId: string) => {
+    const request = await getRequestDetails(requestId);
     if (request) {
       setSelectedRequest(request);
       setIsModalOpen(true);
@@ -370,11 +446,15 @@ export default function Index() {
     setSelectedForCompare([]);
   };
 
-  const toggleRequestSelection = (request: Request) => {
+  const toggleRequestSelection = async (summary: RequestSummary) => {
+    // Get full request details for compare
+    const request = await getRequestDetails(summary.requestId);
+    if (!request) return;
+
     setSelectedForCompare(prev => {
-      const isSelected = prev.some(r => r.id === request.id);
+      const isSelected = prev.some(r => r.requestId === request.requestId);
       if (isSelected) {
-        return prev.filter(r => r.id !== request.id);
+        return prev.filter(r => r.requestId !== request.requestId);
       } else if (prev.length < 2) {
         return [...prev, request];
       }
@@ -382,8 +462,8 @@ export default function Index() {
     });
   };
 
-  const isRequestSelected = (request: Request) => {
-    return selectedForCompare.some(r => r.id === request.id);
+  const isRequestSelected = (summary: RequestSummary) => {
+    return selectedForCompare.some(r => r.requestId === summary.requestId);
   };
 
   const openCompareModal = () => {
@@ -396,62 +476,6 @@ export default function Index() {
     setIsCompareModalOpen(false);
   };
 
-  const getToolStats = () => {
-    let toolDefinitions = 0;
-    let toolCalls = 0;
-    
-    requests.forEach(req => {
-      if (req.body) {
-        // Count tool definitions in system prompts
-        if (req.body.system) {
-          req.body.system.forEach(sys => {
-            if (sys.text && sys.text.includes('<functions>')) {
-              const functionMatches = [...sys.text.matchAll(/<function>([\s\S]*?)<\/function>/g)];
-              toolDefinitions += functionMatches.length;
-            }
-          });
-        }
-        
-        // Count actual tool calls in messages
-        if (req.body.messages) {
-          req.body.messages.forEach(msg => {
-            if (msg.content && Array.isArray(msg.content)) {
-              msg.content.forEach((contentPart: any) => {
-                if (contentPart.type === 'tool_use') {
-                  toolCalls++;
-                }
-                if (contentPart.type === 'text' && contentPart.text && contentPart.text.includes('<functions>')) {
-                  const functionMatches = [...contentPart.text.matchAll(/<function>([\s\S]*?)<\/function>/g)];
-                  toolDefinitions += functionMatches.length;
-                }
-              });
-            }
-          });
-        }
-      }
-    });
-    
-    return `${toolCalls} calls / ${toolDefinitions} tools`;
-  };
-
-  const getPromptGradeStats = () => {
-    let totalGrades = 0;
-    let gradeCount = 0;
-    
-    requests.forEach(req => {
-      if (req.promptGrade && req.promptGrade.score) {
-        totalGrades += req.promptGrade.score;
-        gradeCount++;
-      }
-    });
-    
-    if (gradeCount > 0) {
-      const avgGrade = (totalGrades / gradeCount).toFixed(1);
-      return `${avgGrade}/5`;
-    }
-    return '-/5';
-  };
-
   const formatDuration = (milliseconds: number) => {
     if (milliseconds < 60000) {
       return `${Math.round(milliseconds / 1000)}s`;
@@ -459,52 +483,6 @@ export default function Index() {
       return `${Math.round(milliseconds / 60000)}m`;
     } else {
       return `${Math.round(milliseconds / 3600000)}h`;
-    }
-  };
-
-  const formatConversationSummary = (conversation: ConversationSummary) => {
-    const duration = formatDuration(conversation.duration);
-    return `${conversation.requestCount} requests • ${duration} duration`;
-  };
-
-  const canGradeRequest = (request: Request) => {
-    return request.body && 
-           request.body.messages && 
-           request.body.messages.some(msg => msg.role === 'user') &&
-           request.endpoint.includes('/messages');
-  };
-
-  const gradeRequest = async (requestId: number) => {
-    const request = requests.find(r => r.id === requestId);
-    if (!request || !canGradeRequest(request)) return;
-
-    try {
-      const response = await fetch('/api/grade-prompt', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          messages: request.body!.messages,
-          systemMessages: request.body!.system || [],
-          requestId: request.timestamp
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const promptGrade = await response.json();
-      
-      // Update the request with the new grading
-      const updatedRequests = requests.map(r => 
-        r.id === requestId ? { ...r, promptGrade } : r
-      );
-      setRequests(updatedRequests);
-      
-    } catch (error) {
-      console.error('Failed to grade prompt:', error);
     }
   };
 
@@ -550,6 +528,15 @@ export default function Index() {
   }, [isModalOpen, isConversationModalOpen, isCompareModalOpen, compareMode]);
 
   const filteredRequests = filterRequests(filter);
+
+  // TanStack Virtual for smooth window scrolling with thousands of items
+  const listRef = useRef<HTMLDivElement>(null);
+  const virtualizer = useWindowVirtualizer({
+    count: filteredRequests.length,
+    estimateSize: () => 85, // Estimated row height in pixels
+    overscan: 10, // Render 10 extra items above/below viewport for smooth scrolling
+    scrollMargin: listRef.current?.offsetTop ?? 0,
+  });
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -718,7 +705,7 @@ export default function Index() {
                   {viewMode === "requests" ? "Total Requests" : "Total Conversations"}
                 </p>
                 <p className="text-2xl font-semibold text-gray-900 mt-1">
-                  {viewMode === "requests" ? requests.length : conversations.length}
+                  {viewMode === "requests" ? requestSummaries.length : conversations.length}
                 </p>
               </div>
             </div>
@@ -734,8 +721,8 @@ export default function Index() {
                 <h2 className="text-sm font-semibold text-gray-900 uppercase tracking-wider">Request History</h2>
               </div>
             </div>
-            <div className="divide-y divide-gray-200">
-              {(isFetching && requestsCurrentPage === 1) || isPending ? (
+            <div>
+              {isFetching || isPending ? (
                 <div className="p-8 text-center">
                   <Loader2 className="w-6 h-6 mx-auto animate-spin text-gray-400" />
                   <p className="mt-2 text-xs text-gray-500">Loading requests...</p>
@@ -746,140 +733,143 @@ export default function Index() {
                   <p className="text-xs text-gray-500">Make sure you have set <code className="font-mono bg-gray-100 px-1 py-0.5 rounded">ANTHROPIC_BASE_URL</code> to point at the proxy</p>
                 </div>
               ) : (
-                <>
-                  {filteredRequests.map(request => (
-                    <div
-                      key={request.id}
-                      className={`px-4 py-3 hover:bg-gray-50 transition-colors cursor-pointer border-b border-gray-100 last:border-b-0 ${
-                        compareMode && isRequestSelected(request) ? 'bg-blue-50 border-l-4 border-l-blue-500' : ''
-                      }`}
-                      onClick={() => {
-                        if (compareMode) {
-                          toggleRequestSelection(request);
-                        } else {
-                          showRequestDetails(request.id);
-                        }
-                      }}
-                    >
-                      <div className="flex items-start justify-between">
-                        {/* Compare mode checkbox */}
-                        {compareMode && (
-                          <div className="flex-shrink-0 mr-3 mt-0.5">
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                toggleRequestSelection(request);
-                              }}
-                              className="p-0.5"
-                            >
-                              {isRequestSelected(request) ? (
-                                <CheckSquare className="w-5 h-5 text-blue-600" />
-                              ) : (
-                                <Square className="w-5 h-5 text-gray-400 hover:text-gray-600" />
+                <div ref={listRef}>
+                  <div
+                    style={{
+                      height: `${virtualizer.getTotalSize()}px`,
+                      width: '100%',
+                      position: 'relative',
+                    }}
+                  >
+                    {virtualizer.getVirtualItems().map((virtualRow) => {
+                      const summary = filteredRequests[virtualRow.index];
+                      return (
+                        <div
+                          key={virtualRow.key}
+                          style={{
+                            position: 'absolute',
+                            top: 0,
+                            left: 0,
+                            width: '100%',
+                            transform: `translateY(${virtualRow.start - virtualizer.options.scrollMargin}px)`,
+                          }}
+                        >
+                          <div
+                            className={`px-4 py-3 hover:bg-gray-50 transition-colors cursor-pointer border-b border-gray-100 ${
+                              compareMode && isRequestSelected(summary) ? 'bg-blue-50 border-l-4 border-l-blue-500' : ''
+                            }`}
+                            onClick={() => {
+                              if (compareMode) {
+                                toggleRequestSelection(summary);
+                              } else {
+                                showRequestDetails(summary.requestId);
+                              }
+                            }}
+                          >
+                            <div className="flex items-start justify-between">
+                              {/* Compare mode checkbox */}
+                              {compareMode && (
+                                <div className="flex-shrink-0 mr-3 mt-0.5">
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      toggleRequestSelection(summary);
+                                    }}
+                                    className="p-0.5"
+                                  >
+                                    {isRequestSelected(summary) ? (
+                                      <CheckSquare className="w-5 h-5 text-blue-600" />
+                                    ) : (
+                                      <Square className="w-5 h-5 text-gray-400 hover:text-gray-600" />
+                                    )}
+                                  </button>
+                                </div>
                               )}
-                            </button>
-                          </div>
-                        )}
-                        <div className="flex-1 min-w-0 mr-4">
-                          {/* Model and Status */}
-                          <div className="flex items-center space-x-3 mb-1">
-                            <h3 className="text-sm font-medium">
-                              {request.routedModel || request.body?.model ? (
-                                // Use routedModel if available, otherwise fall back to body.model
-                                (() => {
-                                  const model = request.routedModel || request.body?.model || '';
-                                  if (model.includes('opus')) return <span className="text-purple-600 font-semibold">Opus</span>;
-                                  if (model.includes('sonnet')) return <span className="text-indigo-600 font-semibold">Sonnet</span>;
-                                  if (model.includes('haiku')) return <span className="text-teal-600 font-semibold">Haiku</span>;
-                                  if (model.includes('gpt-4o')) return <span className="text-green-600 font-semibold">GPT-4o</span>;
-                                  if (model.includes('gpt')) return <span className="text-green-600 font-semibold">GPT</span>;
-                                  return <span className="text-gray-900">{model.split('-')[0]}</span>;
-                                })()
-                              ) : <span className="text-gray-900">API</span>}
-                            </h3>
-                            {request.routedModel && request.routedModel !== request.originalModel && (
-                              <span className="text-xs px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded font-medium flex items-center space-x-1">
-                                <ArrowLeftRight className="w-3 h-3" />
-                                <span>routed</span>
-                              </span>
-                            )}
-                            {request.response?.statusCode && (
-                              <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${
-                                request.response.statusCode >= 200 && request.response.statusCode < 300
-                                  ? 'bg-green-100 text-green-700'
-                                  : request.response.statusCode >= 300 && request.response.statusCode < 400
-                                  ? 'bg-yellow-100 text-yellow-700'
-                                  : 'bg-red-100 text-red-700'
-                              }`}>
-                                {request.response.statusCode}
-                              </span>
-                            )}
-                            {request.conversationId && (
-                              <span className="text-xs px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded font-medium">
-                                Turn {request.turnNumber}
-                              </span>
-                            )}
-                            {/* Selection order indicator in compare mode */}
-                            {compareMode && isRequestSelected(request) && (
-                              <span className="text-xs px-1.5 py-0.5 bg-blue-600 text-white rounded font-medium">
-                                #{selectedForCompare.findIndex(r => r.id === request.id) + 1}
-                              </span>
-                            )}
-                          </div>
+                              <div className="flex-1 min-w-0 mr-4">
+                                {/* Model and Status */}
+                                <div className="flex items-center space-x-3 mb-1">
+                                  <h3 className="text-sm font-medium">
+                                    {summary.routedModel || summary.model ? (
+                                      (() => {
+                                        const model = summary.routedModel || summary.model || '';
+                                        if (model.includes('opus')) return <span className="text-purple-600 font-semibold">Opus</span>;
+                                        if (model.includes('sonnet')) return <span className="text-indigo-600 font-semibold">Sonnet</span>;
+                                        if (model.includes('haiku')) return <span className="text-teal-600 font-semibold">Haiku</span>;
+                                        if (model.includes('gpt-4o')) return <span className="text-green-600 font-semibold">GPT-4o</span>;
+                                        if (model.includes('gpt')) return <span className="text-green-600 font-semibold">GPT</span>;
+                                        return <span className="text-gray-900">{model.split('-')[0]}</span>;
+                                      })()
+                                    ) : <span className="text-gray-900">API</span>}
+                                  </h3>
+                                  {summary.routedModel && summary.routedModel !== summary.originalModel && (
+                                    <span className="text-xs px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded font-medium flex items-center space-x-1">
+                                      <ArrowLeftRight className="w-3 h-3" />
+                                      <span>routed</span>
+                                    </span>
+                                  )}
+                                  {summary.statusCode && (
+                                    <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${
+                                      summary.statusCode >= 200 && summary.statusCode < 300
+                                        ? 'bg-green-100 text-green-700'
+                                        : summary.statusCode >= 300 && summary.statusCode < 400
+                                        ? 'bg-yellow-100 text-yellow-700'
+                                        : 'bg-red-100 text-red-700'
+                                    }`}>
+                                      {summary.statusCode}
+                                    </span>
+                                  )}
+                                  {compareMode && isRequestSelected(summary) && (
+                                    <span className="text-xs px-1.5 py-0.5 bg-blue-600 text-white rounded font-medium">
+                                      #{selectedForCompare.findIndex(r => r.requestId === summary.requestId) + 1}
+                                    </span>
+                                  )}
+                                </div>
 
-                          {/* Endpoint */}
-                          <div className="text-xs text-gray-600 font-mono mb-1">
-                            {getChatCompletionsEndpoint(request.routedModel, request.endpoint)}
-                          </div>
+                                {/* Endpoint */}
+                                <div className="text-xs text-gray-600 font-mono mb-1">
+                                  {getChatCompletionsEndpoint(summary.routedModel, summary.endpoint)}
+                                </div>
 
-                          {/* Metrics Row */}
-                          <div className="flex items-center space-x-3 text-xs">
-                            {request.response?.body?.usage && (
-                              <>
-                                <span className="font-mono text-gray-600">
-                                  <span className="font-medium text-gray-900">{((request.response.body.usage.input_tokens || 0) + (request.response.body.usage.cache_read_input_tokens || 0)).toLocaleString()}</span> in
-                                </span>
-                                <span className="font-mono text-gray-600">
-                                  <span className="font-medium text-gray-900">{(request.response.body.usage.output_tokens || 0).toLocaleString()}</span> out
-                                </span>
-                                {request.response.body.usage.cache_read_input_tokens > 0 && (
-                                  <span className="font-mono bg-green-50 text-green-700 px-1.5 py-0.5 rounded">
-                                    {Math.round((request.response.body.usage.cache_read_input_tokens / ((request.response.body.usage.input_tokens || 0) + (request.response.body.usage.cache_read_input_tokens || 0))) * 100)}% cached
-                                  </span>
-                                )}
-                              </>
-                            )}
+                                {/* Metrics Row */}
+                                <div className="flex items-center space-x-3 text-xs">
+                                  {summary.usage && (
+                                    <>
+                                      <span className="font-mono text-gray-600">
+                                        <span className="font-medium text-gray-900">{((summary.usage.input_tokens || 0) + (summary.usage.cache_read_input_tokens || 0)).toLocaleString()}</span> in
+                                      </span>
+                                      <span className="font-mono text-gray-600">
+                                        <span className="font-medium text-gray-900">{(summary.usage.output_tokens || 0).toLocaleString()}</span> out
+                                      </span>
+                                      {(summary.usage.cache_read_input_tokens || 0) > 0 && (
+                                        <span className="font-mono bg-green-50 text-green-700 px-1.5 py-0.5 rounded">
+                                          {Math.round(((summary.usage.cache_read_input_tokens || 0) / ((summary.usage.input_tokens || 0) + (summary.usage.cache_read_input_tokens || 0))) * 100)}% cached
+                                        </span>
+                                      )}
+                                    </>
+                                  )}
 
-                            {request.response?.responseTime && (
-                              <span className="font-mono text-gray-600">
-                                <span className="font-medium text-gray-900">{(request.response.responseTime / 1000).toFixed(2)}</span>s
-                              </span>
-                            )}
+                                  {summary.responseTime && (
+                                    <span className="font-mono text-gray-600">
+                                      <span className="font-medium text-gray-900">{(summary.responseTime / 1000).toFixed(2)}</span>s
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                              <div className="flex-shrink-0 text-right">
+                                <div className="text-xs text-gray-500">
+                                  {new Date(summary.timestamp).toLocaleDateString()}
+                                </div>
+                                <div className="text-xs text-gray-400">
+                                  {new Date(summary.timestamp).toLocaleTimeString()}
+                                </div>
+                              </div>
+                            </div>
                           </div>
                         </div>
-                        <div className="flex-shrink-0 text-right">
-                          <div className="text-xs text-gray-500">
-                            {new Date(request.timestamp).toLocaleDateString()}
-                          </div>
-                          <div className="text-xs text-gray-400">
-                            {new Date(request.timestamp).toLocaleTimeString()}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                  {hasMoreRequests && (
-                    <div className="p-3 text-center border-t border-gray-100">
-                      <button
-                        onClick={() => loadRequests(modelFilter, true)}
-                        disabled={isFetching}
-                        className="px-3 py-1.5 text-xs font-medium text-gray-700 bg-gray-100 rounded hover:bg-gray-200 disabled:opacity-50 transition-colors"
-                      >
-                        {isFetching ? "Loading..." : "Load More"}
-                      </button>
-                    </div>
-                  )}
-                </>
+                      );
+                    })}
+                  </div>
+                </div>
               )}
             </div>
           </div>
@@ -987,7 +977,7 @@ export default function Index() {
               </div>
             </div>
             <div className="p-6 overflow-y-auto max-h-[calc(90vh-100px)]">
-              <RequestDetailContent request={selectedRequest} onGrade={() => gradeRequest(selectedRequest.id)} />
+              <RequestDetailContent request={selectedRequest} />
             </div>
           </div>
         </div>

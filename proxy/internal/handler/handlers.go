@@ -237,6 +237,30 @@ func (h *Handler) GetRequests(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// GetRequestsSummary returns lightweight request data for fast list rendering
+func (h *Handler) GetRequestsSummary(w http.ResponseWriter, r *http.Request) {
+	modelFilter := r.URL.Query().Get("model")
+	if modelFilter == "" {
+		modelFilter = "all"
+	}
+
+	summaries, err := h.storageService.GetRequestsSummary(modelFilter)
+	if err != nil {
+		log.Printf("Error getting request summaries: %v", err)
+		http.Error(w, "Failed to get requests", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(struct {
+		Requests []*model.RequestSummary `json:"requests"`
+		Total    int                     `json:"total"`
+	}{
+		Requests: summaries,
+		Total:    len(summaries),
+	})
+}
+
 func (h *Handler) DeleteRequests(w http.ResponseWriter, r *http.Request) {
 
 	clearedCount, err := h.storageService.ClearRequests()
