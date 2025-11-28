@@ -14,7 +14,10 @@ import {
   Clock,
   Cpu,
   Brain,
-  ArrowRight
+  ArrowRight,
+  List,
+  FileText,
+  Download
 } from 'lucide-react';
 import { MessageContent } from './MessageContent';
 
@@ -201,6 +204,7 @@ function computeMessageDiff(messages1: Message[], messages2: Message[]): Message
 }
 
 export function RequestCompareModal({ request1, request2, onClose }: RequestCompareModalProps) {
+  const [viewMode, setViewMode] = useState<'structured' | 'diff'>('structured');
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
     summary: true,
     messages: true,
@@ -259,17 +263,48 @@ export function RequestCompareModal({ request1, request2, onClose }: RequestComp
                 <span className={`font-medium ${model2.color}`}>{model2.name}</span>
               </div>
             </div>
-            <button
-              onClick={onClose}
-              className="text-gray-400 hover:text-gray-600 transition-colors p-2 hover:bg-gray-100 rounded-lg"
-            >
-              <X className="w-5 h-5" />
-            </button>
+            <div className="flex items-center space-x-2">
+              {/* View mode toggle */}
+              <div className="flex items-center bg-gray-100 rounded p-0.5">
+                <button
+                  onClick={() => setViewMode('structured')}
+                  className={`px-2.5 py-1 text-xs font-medium rounded flex items-center space-x-1.5 transition-colors ${
+                    viewMode === 'structured'
+                      ? 'bg-white text-gray-900 shadow-sm'
+                      : 'text-gray-600 hover:text-gray-900'
+                  }`}
+                >
+                  <List className="w-3.5 h-3.5" />
+                  <span>Structured</span>
+                </button>
+                <button
+                  onClick={() => setViewMode('diff')}
+                  className={`px-2.5 py-1 text-xs font-medium rounded flex items-center space-x-1.5 transition-colors ${
+                    viewMode === 'diff'
+                      ? 'bg-white text-gray-900 shadow-sm'
+                      : 'text-gray-600 hover:text-gray-900'
+                  }`}
+                >
+                  <FileText className="w-3.5 h-3.5" />
+                  <span>Text Diff</span>
+                </button>
+              </div>
+              <button
+                onClick={onClose}
+                className="text-gray-400 hover:text-gray-600 transition-colors p-2 hover:bg-gray-100 rounded-lg"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
           </div>
         </div>
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
+          {viewMode === 'diff' ? (
+            <TextDiffView request1={request1} request2={request2} />
+          ) : (
+          <>
           {/* Summary Section */}
           <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
             <div
@@ -451,33 +486,467 @@ export function RequestCompareModal({ request1, request2, onClose }: RequestComp
               )}
             </div>
           )}
+          </>
+          )}
         </div>
       </div>
     </div>
   );
 }
 
+// Convert full request to plain text for diff
+function requestToText(request: Request): string[] {
+  const lines: string[] = [];
+
+  // System prompt
+  if (request.body?.system && request.body.system.length > 0) {
+    lines.push('=== SYSTEM PROMPT ===');
+    request.body.system.forEach((sys, idx) => {
+      lines.push(`--- System Block [${idx + 1}] (${(new Blob([sys.text]).size / 1024).toFixed(1)} KB) ---`);
+      sys.text.split('\n').forEach(line => lines.push(line));
+      lines.push('');
+    });
+    lines.push('');
+  }
+
+  // Tools (just names and sizes, not full definitions)
+  if (request.body?.tools && request.body.tools.length > 0) {
+    lines.push('=== TOOLS ===');
+    const toolsSize = new Blob([JSON.stringify(request.body.tools)]).size;
+    lines.push(`Total: ${request.body.tools.length} tools (${(toolsSize / 1024).toFixed(1)} KB)`);
+    request.body.tools.forEach(tool => {
+      const toolSize = new Blob([JSON.stringify(tool)]).size;
+      lines.push(`  - ${tool.name} (${(toolSize / 1024).toFixed(1)} KB)`);
+    });
+    lines.push('');
+  }
+
+  // Messages
+  lines.push('=== MESSAGES ===');
+  const messages = request.body?.messages || [];
+  messages.forEach((msg, idx) => {
+    const roleLabel = msg.role.toUpperCase();
+    const msgSize = new Blob([getMessageText(msg.content)]).size;
+    lines.push(`--- ${roleLabel} [${idx + 1}] (${(msgSize / 1024).toFixed(1)} KB) ---`);
+    const text = getMessageText(msg.content);
+    text.split('\n').forEach(line => lines.push(line));
+    lines.push('');
+  });
+
+  return lines;
+}
+
+// Simple line-based diff algorithm
+function computeLineDiff(lines1: string[], lines2: string[]): Array<{ type: 'same' | 'added' | 'removed'; line: string; lineNum1?: number; lineNum2?: number }> {
+  const result: Array<{ type: 'same' | 'added' | 'removed'; line: string; lineNum1?: number; lineNum2?: number }> = [];
+
+  // Use longest common subsequence approach
+  const m = lines1.length;
+  const n = lines2.length;
+
+  // Build LCS table
+  const dp: number[][] = Array(m + 1).fill(null).map(() => Array(n + 1).fill(0));
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      if (lines1[i - 1] === lines2[j - 1]) {
+        dp[i][j] = dp[i - 1][j - 1] + 1;
+      } else {
+        dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+      }
+    }
+  }
+
+  // Backtrack to find diff
+  let i = m, j = n;
+  const diffItems: Array<{ type: 'same' | 'added' | 'removed'; line: string; idx1?: number; idx2?: number }> = [];
+
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && lines1[i - 1] === lines2[j - 1]) {
+      diffItems.unshift({ type: 'same', line: lines1[i - 1], idx1: i, idx2: j });
+      i--;
+      j--;
+    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+      diffItems.unshift({ type: 'added', line: lines2[j - 1], idx2: j });
+      j--;
+    } else {
+      diffItems.unshift({ type: 'removed', line: lines1[i - 1], idx1: i });
+      i--;
+    }
+  }
+
+  // Convert to result with line numbers
+  let lineNum1 = 1, lineNum2 = 1;
+  for (const item of diffItems) {
+    if (item.type === 'same') {
+      result.push({ type: 'same', line: item.line, lineNum1: lineNum1++, lineNum2: lineNum2++ });
+    } else if (item.type === 'removed') {
+      result.push({ type: 'removed', line: item.line, lineNum1: lineNum1++ });
+    } else {
+      result.push({ type: 'added', line: item.line, lineNum2: lineNum2++ });
+    }
+  }
+
+  return result;
+}
+
+// Text diff view component
+function TextDiffView({ request1, request2 }: { request1: Request; request2: Request }) {
+  const lines1 = useMemo(() => requestToText(request1), [request1]);
+  const lines2 = useMemo(() => requestToText(request2), [request2]);
+  const diff = useMemo(() => computeLineDiff(lines1, lines2), [lines1, lines2]);
+
+  const stats = useMemo(() => {
+    let added = 0, removed = 0, same = 0;
+    diff.forEach(d => {
+      if (d.type === 'added') added++;
+      else if (d.type === 'removed') removed++;
+      else same++;
+    });
+    return { added, removed, same };
+  }, [diff]);
+
+  // Generate unified diff format
+  const generateUnifiedDiff = () => {
+    const lines: string[] = [];
+    lines.push('--- Request #1');
+    lines.push('+++ Request #2');
+    lines.push('');
+
+    diff.forEach(item => {
+      const prefix = item.type === 'added' ? '+' : item.type === 'removed' ? '-' : ' ';
+      lines.push(`${prefix}${item.line}`);
+    });
+
+    return lines.join('\n');
+  };
+
+  // Generate markdown format
+  const generateMarkdown = () => {
+    const lines: string[] = [];
+    lines.push('# Request Comparison');
+    lines.push('');
+    lines.push(`**Added:** ${stats.added} lines | **Removed:** ${stats.removed} lines | **Unchanged:** ${stats.same} lines`);
+    lines.push('');
+    lines.push('```diff');
+    diff.forEach(item => {
+      const prefix = item.type === 'added' ? '+' : item.type === 'removed' ? '-' : ' ';
+      lines.push(`${prefix}${item.line}`);
+    });
+    lines.push('```');
+    return lines.join('\n');
+  };
+
+  // Generate JSON format
+  const generateJSON = () => {
+    return JSON.stringify({
+      stats,
+      request1: {
+        lines: lines1,
+        timestamp: request1.timestamp,
+        model: request1.routedModel || request1.body?.model
+      },
+      request2: {
+        lines: lines2,
+        timestamp: request2.timestamp,
+        model: request2.routedModel || request2.body?.model
+      },
+      diff: diff.map(d => ({
+        type: d.type,
+        line: d.line,
+        lineNum1: d.lineNum1,
+        lineNum2: d.lineNum2
+      }))
+    }, null, 2);
+  };
+
+  const handleDownload = (format: 'diff' | 'md' | 'json' | 'vscode') => {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+
+    // VS Code: download both files separately
+    if (format === 'vscode') {
+      const file1Content = lines1.join('\n');
+      const file2Content = lines2.join('\n');
+
+      // Download first file
+      const blob1 = new Blob([file1Content], { type: 'text/plain' });
+      const url1 = URL.createObjectURL(blob1);
+      const a1 = document.createElement('a');
+      a1.href = url1;
+      a1.download = `request1-${timestamp}.txt`;
+      document.body.appendChild(a1);
+      a1.click();
+      document.body.removeChild(a1);
+      URL.revokeObjectURL(url1);
+
+      // Small delay then download second file
+      setTimeout(() => {
+        const blob2 = new Blob([file2Content], { type: 'text/plain' });
+        const url2 = URL.createObjectURL(blob2);
+        const a2 = document.createElement('a');
+        a2.href = url2;
+        a2.download = `request2-${timestamp}.txt`;
+        document.body.appendChild(a2);
+        a2.click();
+        document.body.removeChild(a2);
+        URL.revokeObjectURL(url2);
+
+        // Show instruction
+        alert(`Files downloaded!\n\nCompare with your preferred diff tool:\n  diff ~/Downloads/request1-${timestamp}.txt ~/Downloads/request2-${timestamp}.txt\n\nOr in VS Code:\n  code --diff ~/Downloads/request1-${timestamp}.txt ~/Downloads/request2-${timestamp}.txt`);
+      }, 100);
+
+      return;
+    }
+
+    let content: string;
+    let filename: string;
+    let type: string;
+
+    switch (format) {
+      case 'md':
+        content = generateMarkdown();
+        filename = `diff-${timestamp}.md`;
+        type = 'text/markdown';
+        break;
+      case 'json':
+        content = generateJSON();
+        filename = `diff-${timestamp}.json`;
+        type = 'application/json';
+        break;
+      default:
+        content = generateUnifiedDiff();
+        filename = `diff-${timestamp}.diff`;
+        type = 'text/plain';
+    }
+
+    const blob = new Blob([content], { type });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+      <div className="bg-gray-50 px-4 py-3 border-b border-gray-200">
+        <div className="flex items-center justify-between">
+          <h4 className="text-sm font-semibold text-gray-900 flex items-center space-x-2">
+            <FileText className="w-4 h-4 text-blue-600" />
+            <span>Text Diff</span>
+          </h4>
+          <div className="flex items-center space-x-3 text-xs">
+            <span className="text-green-600 font-medium">+{stats.added} added</span>
+            <span className="text-red-600 font-medium">-{stats.removed} removed</span>
+            <span className="text-gray-500">{stats.same} unchanged</span>
+            <div className="ml-2 flex items-center space-x-1 border-l border-gray-300 pl-3">
+              <button
+                onClick={() => handleDownload('diff')}
+                className="px-2 py-1 text-gray-600 hover:text-gray-900 hover:bg-gray-200 rounded transition-colors font-medium"
+                title="Download as unified diff"
+              >
+                .diff
+              </button>
+              <button
+                onClick={() => handleDownload('json')}
+                className="px-2 py-1 text-gray-600 hover:text-gray-900 hover:bg-gray-200 rounded transition-colors font-medium"
+                title="Download as JSON"
+              >
+                .json
+              </button>
+              <button
+                onClick={() => handleDownload('vscode')}
+                className="px-2 py-1 text-gray-600 hover:text-gray-900 hover:bg-gray-200 rounded transition-colors font-medium"
+                title="Download both files for external diff tool"
+              >
+                Side-by-Side
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div className="overflow-auto max-h-[70vh]">
+        <table className="w-full text-xs font-mono">
+          <tbody>
+            {diff.map((item, idx) => (
+              <tr
+                key={idx}
+                className={
+                  item.type === 'added'
+                    ? 'bg-green-50'
+                    : item.type === 'removed'
+                    ? 'bg-red-50'
+                    : 'bg-white hover:bg-gray-50'
+                }
+              >
+                <td className="w-12 px-2 py-0.5 text-right text-gray-400 select-none border-r border-gray-200">
+                  {item.lineNum1 || ''}
+                </td>
+                <td className="w-12 px-2 py-0.5 text-right text-gray-400 select-none border-r border-gray-200">
+                  {item.lineNum2 || ''}
+                </td>
+                <td className="w-6 px-1 py-0.5 text-center select-none">
+                  {item.type === 'added' && <span className="text-green-600 font-bold">+</span>}
+                  {item.type === 'removed' && <span className="text-red-600 font-bold">-</span>}
+                </td>
+                <td className={`px-2 py-0.5 whitespace-pre-wrap break-all ${
+                  item.type === 'added'
+                    ? 'text-green-800'
+                    : item.type === 'removed'
+                    ? 'text-red-800'
+                    : 'text-gray-700'
+                }`}>
+                  {item.line || '\u00A0'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// Calculate size of content in KB
+function getContentSize(content: any): number {
+  if (!content) return 0;
+  const text = typeof content === 'string' ? content : JSON.stringify(content);
+  return new Blob([text]).size;
+}
+
+// Download helper
+function downloadFile(content: string, filename: string, type: string = 'application/json') {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 // Request summary card
 function RequestSummaryCard({ request, label }: { request: Request; label: string }) {
   const model = request.routedModel || request.body?.model || 'Unknown';
   const tokens = request.response?.body?.usage;
-  const totalTokens = (tokens?.input_tokens || 0) + (tokens?.output_tokens || 0);
+  const inputTokens = (tokens?.input_tokens || 0) + (tokens?.cache_read_input_tokens || 0);
+  const outputTokens = tokens?.output_tokens || 0;
+  const cacheRead = tokens?.cache_read_input_tokens || 0;
+  const cacheCreation = tokens?.cache_creation_input_tokens || 0;
+
+  // Calculate sizes
+  const systemSize = request.body?.system?.reduce((acc, s) => acc + getContentSize(s.text), 0) || 0;
+  const toolsSize = getContentSize(request.body?.tools);
+  const messagesSize = request.body?.messages?.reduce((acc, m) => acc + getContentSize(m.content), 0) || 0;
+  const totalSize = systemSize + toolsSize + messagesSize;
+
+  const formatSize = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} B`;
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  };
+
+  const handleDownloadJSON = () => {
+    const timestamp = new Date(request.timestamp).toISOString().replace(/[:.]/g, '-');
+    const filename = `request-${timestamp}.json`;
+    downloadFile(JSON.stringify(request, null, 2), filename);
+  };
+
+  const handleDownloadMarkdown = () => {
+    const timestamp = new Date(request.timestamp).toISOString().replace(/[:.]/g, '-');
+    const model = request.routedModel || request.body?.model || 'Unknown';
+
+    let md = `# Request ${timestamp}\n\n`;
+    md += `**Model:** ${model}\n`;
+    md += `**Input Tokens:** ${inputTokens.toLocaleString()}\n`;
+    md += `**Output Tokens:** ${outputTokens.toLocaleString()}\n\n`;
+
+    if (request.body?.system) {
+      md += `## System Prompt\n\n`;
+      request.body.system.forEach((sys, i) => {
+        md += `### Block ${i + 1}\n\n\`\`\`\n${sys.text}\n\`\`\`\n\n`;
+      });
+    }
+
+    if (request.body?.messages) {
+      md += `## Messages\n\n`;
+      request.body.messages.forEach((msg, i) => {
+        md += `### ${msg.role.toUpperCase()} [${i + 1}]\n\n`;
+        const text = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content, null, 2);
+        md += `\`\`\`\n${text}\n\`\`\`\n\n`;
+      });
+    }
+
+    downloadFile(md, `request-${timestamp}.md`, 'text/markdown');
+  };
 
   return (
     <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
-      <div className="text-xs font-medium text-gray-500 mb-2">{label}</div>
+      <div className="flex items-center justify-between mb-2">
+        <div className="text-xs font-medium text-gray-500">{label}</div>
+        <div className="flex items-center space-x-1">
+          <button
+            onClick={handleDownloadMarkdown}
+            className="px-1.5 py-0.5 text-xs text-gray-500 hover:text-gray-700 hover:bg-gray-200 rounded transition-colors"
+            title="Download as Markdown"
+          >
+            .md
+          </button>
+          <button
+            onClick={handleDownloadJSON}
+            className="px-1.5 py-0.5 text-xs text-gray-500 hover:text-gray-700 hover:bg-gray-200 rounded transition-colors"
+            title="Download as JSON"
+          >
+            .json
+          </button>
+        </div>
+      </div>
       <div className="space-y-2">
         <div className="flex items-center justify-between text-sm">
           <span className="text-gray-600">Model:</span>
           <span className="font-medium">{model.split('-').slice(-1)[0] || model}</span>
         </div>
         <div className="flex items-center justify-between text-sm">
-          <span className="text-gray-600">Messages:</span>
-          <span className="font-medium">{request.body?.messages?.length || 0}</span>
+          <span className="text-gray-600">Input Tokens:</span>
+          <span className="font-medium">{inputTokens.toLocaleString()}</span>
         </div>
         <div className="flex items-center justify-between text-sm">
-          <span className="text-gray-600">Tokens:</span>
-          <span className="font-medium">{totalTokens.toLocaleString()}</span>
+          <span className="text-gray-600">Output Tokens:</span>
+          <span className="font-medium">{outputTokens.toLocaleString()}</span>
+        </div>
+        {cacheRead > 0 && (
+          <div className="flex items-center justify-between text-sm">
+            <span className="text-gray-600">Cache Read:</span>
+            <span className="font-medium text-green-600">{cacheRead.toLocaleString()}</span>
+          </div>
+        )}
+        {cacheCreation > 0 && (
+          <div className="flex items-center justify-between text-sm">
+            <span className="text-gray-600">Cache Creation:</span>
+            <span className="font-medium text-blue-600">{cacheCreation.toLocaleString()}</span>
+          </div>
+        )}
+        <div className="border-t border-gray-200 pt-2 mt-2">
+          <div className="text-xs font-medium text-gray-500 mb-1">Size Breakdown</div>
+          <div className="flex items-center justify-between text-sm">
+            <span className="text-gray-600">System Prompt:</span>
+            <span className="font-medium font-mono">{formatSize(systemSize)}</span>
+          </div>
+          <div className="flex items-center justify-between text-sm">
+            <span className="text-gray-600">Tools ({request.body?.tools?.length || 0}):</span>
+            <span className="font-medium font-mono">{formatSize(toolsSize)}</span>
+          </div>
+          <div className="flex items-center justify-between text-sm">
+            <span className="text-gray-600">Messages ({request.body?.messages?.length || 0}):</span>
+            <span className="font-medium font-mono">{formatSize(messagesSize)}</span>
+          </div>
+          <div className="flex items-center justify-between text-sm font-medium border-t border-gray-200 pt-1 mt-1">
+            <span className="text-gray-700">Total:</span>
+            <span className="font-mono">{formatSize(totalSize)}</span>
+          </div>
         </div>
         <div className="flex items-center justify-between text-sm">
           <span className="text-gray-600">Response Time:</span>
@@ -490,6 +959,15 @@ function RequestSummaryCard({ request, label }: { request: Request; label: strin
       </div>
     </div>
   );
+}
+
+// Get message size in KB
+function getMessageSize(message: Message | undefined): string {
+  if (!message) return '0 KB';
+  const text = getMessageText(message.content);
+  const bytes = new Blob([text]).size;
+  if (bytes < 1024) return `${bytes} B`;
+  return `${(bytes / 1024).toFixed(1)} KB`;
 }
 
 // Message diff row component
@@ -567,6 +1045,9 @@ function MessageDiffRow({ diff }: { diff: MessageDiff }) {
               {diff.index1 !== undefined ? ` → #${diff.index2 + 1}` : `#${diff.index2 + 1}`}
             </span>
           )}
+          <span className="text-xs text-gray-400 font-mono">
+            {getMessageSize(diff.message1 || diff.message2)}
+          </span>
         </div>
         {expanded ? (
           <ChevronDown className="w-4 h-4 text-gray-500" />
