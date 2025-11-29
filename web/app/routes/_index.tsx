@@ -1,5 +1,6 @@
 import type { MetaFunction } from "@remix-run/node";
 import { useState, useEffect, useTransition, useCallback, useRef } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   Activity,
   RefreshCw,
@@ -167,12 +168,17 @@ interface Conversation {
 }
 
 interface DashboardStats {
-  dailyStats: { date: string; tokens: number; requests: number; }[];
-  hourlyStats: { hour: number; tokens: number; requests: number; }[];
-  modelStats: { model: string; tokens: number; requests: number; }[];
-  todayTokens: number;
-  todayRequests: number;
-  avgResponseTime: number;
+  dailyStats: { date: string; tokens: number; requests: number; models?: Record<string, ModelStats>; }[];
+  hourlyStats?: { hour: number; tokens: number; requests: number; models?: Record<string, ModelStats>; }[];
+  modelStats?: { model: string; tokens: number; requests: number; }[];
+  todayTokens?: number;
+  todayRequests?: number;
+  avgResponseTime?: number;
+}
+
+interface ModelStats {
+  tokens: number;
+  requests: number;
 }
 
 export default function Index() {
@@ -204,6 +210,9 @@ export default function Index() {
   const [isCompareModalOpen, setIsCompareModalOpen] = useState(false);
   const [currentWeekStart, setCurrentWeekStart] = useState<Date | null>(null);
   const [isNavigating, setIsNavigating] = useState(false);
+
+  // Virtualization ref for requests list
+  const requestsParentRef = useRef<HTMLDivElement>(null);
 
   // Helper to get Sunday-Saturday week boundaries for a given date
   const getWeekBoundaries = (date: Date) => {
@@ -248,21 +257,37 @@ export default function Index() {
     return response.json();
   };
 
-  // Load all stats (weekly + hourly)
+  // Load model stats only
+  const loadModelStats = async (date?: Date) => {
+    const targetDate = date || selectedDate;
+    const selectedDateStr = targetDate.toISOString().split('T')[0];
+
+    const modelUrl = new URL('/api/stats/models', window.location.origin);
+    modelUrl.searchParams.append('date', selectedDateStr);
+
+    const response = await fetch(modelUrl.toString());
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+    return response.json();
+  };
+
+  // Load all stats (weekly + hourly + models)
   const loadStats = async (date?: Date) => {
     setIsLoadingStats(true);
     try {
       const targetDate = date || selectedDate;
       const { weekStart } = getWeekBoundaries(targetDate);
 
-      const [weeklyData, hourlyData] = await Promise.all([
+      const [weeklyData, hourlyData, modelData] = await Promise.all([
         loadWeeklyStats(targetDate),
-        loadHourlyStats(targetDate)
+        loadHourlyStats(targetDate),
+        loadModelStats(targetDate)
       ]);
 
       setStats({
         ...weeklyData,
-        ...hourlyData
+        ...hourlyData,
+        ...modelData
       });
       setCurrentWeekStart(weekStart);
     } catch (error) {
@@ -295,6 +320,7 @@ export default function Index() {
       }
       url.searchParams.append("start", startOfDay.toISOString());
       url.searchParams.append("end", endOfDay.toISOString());
+      // Load ALL requests - virtualization will handle rendering efficiently
 
       const response = await fetch(url.toString());
       if (!response.ok) {
@@ -307,8 +333,6 @@ export default function Index() {
         ...req,
         id: req.requestId || `request_${index}`
       }));
-
-      console.log(`Loaded ${mappedRequests.length} requests (total: ${data.total})`);
 
       startTransition(() => {
         setRequestSummaries(mappedRequests);
@@ -562,7 +586,9 @@ export default function Index() {
 
   const handleDateChange = async (newDate: Date) => {
     // Prevent concurrent navigation
-    if (isNavigating) return;
+    if (isNavigating) {
+      return;
+    }
 
     setIsNavigating(true);
 
@@ -576,22 +602,34 @@ export default function Index() {
       setSelectedDate(newDate);
 
       if (needsNewWeek) {
-        // Load both weekly and hourly stats for new week
+        // Load weekly, hourly, and model stats for new week
         setCurrentWeekStart(newWeekStart);
         await loadStats(newDate);
       } else {
-        // Just load hourly stats for the new date (same week)
-        const hourlyData = await loadHourlyStats(newDate);
-        setStats(prev => ({
-          ...prev,
-          ...hourlyData
-        }));
+        // Just load hourly and model stats for the new date (same week)
+        const [hourlyData, modelData] = await Promise.all([
+          loadHourlyStats(newDate),
+          loadModelStats(newDate)
+        ]);
+
+        if (hourlyData && modelData) {
+          setStats(prev => {
+            if (!prev) return { dailyStats: [], ...hourlyData, ...modelData };
+            return {
+              ...prev,
+              ...hourlyData,
+              ...modelData
+            };
+          });
+        }
       }
 
-      // Always reload requests for the selected date
+      // Reload requests for the selected date
       if (viewMode === 'requests') {
-        await loadRequests(modelFilter, newDate);
+        loadRequests(modelFilter, newDate);
       }
+    } catch (error) {
+      console.error('Error in handleDateChange:', error);
     } finally {
       setIsNavigating(false);
     }
@@ -634,6 +672,14 @@ export default function Index() {
   }, [isModalOpen, isConversationModalOpen, isCompareModalOpen, compareMode]);
 
   const filteredRequests = filterRequests(filter);
+
+  // Set up virtualizer for requests list with dedicated scroll container
+  const requestsVirtualizer = useVirtualizer({
+    count: filteredRequests.length,
+    getScrollElement: () => requestsParentRef.current,
+    estimateSize: () => 120, // Estimated height of each request item
+    overscan: 10, // Render 10 extra items above and below viewport for smooth scrolling
+  });
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -764,7 +810,9 @@ export default function Index() {
                     ? 'text-gray-900 font-semibold'
                     : 'text-gray-700'
                 }`}>
-                  {selectedDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                  {selectedDate.toDateString() === new Date().toDateString()
+                    ? 'Today'
+                    : selectedDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
                 </span>
                 <button
                   onClick={() => {
@@ -869,84 +917,102 @@ export default function Index() {
                         <p className="text-xs text-gray-500">No requests for this date</p>
                       </div>
                     ) : (
-                      <div>
-                        {filteredRequests.map((summary) => (
-                          <div
-                            key={summary.requestId}
-                            className="px-4 py-4 hover:bg-gray-50 transition-colors cursor-pointer border-b border-gray-100 last:border-b-0"
-                            onClick={() => loadRequestDetails(summary.requestId)}
-                          >
-                                  <div className="flex items-start justify-between">
-                                    <div className="flex-1 min-w-0 mr-4">
-                                      <div className="flex items-center space-x-3 mb-1">
-                                        <span
-                                          className={`font-mono text-sm font-semibold ${
-                                            summary.model.toLowerCase().includes('opus')
-                                              ? 'text-purple-600'
-                                              : summary.model.toLowerCase().includes('sonnet')
-                                              ? 'text-blue-600'
-                                              : 'text-green-600'
-                                          }`}
-                                        >
-                                          {summary.model.toLowerCase().includes('opus')
-                                            ? 'Opus'
+                      <div
+                        ref={requestsParentRef}
+                        className="overflow-auto"
+                        style={{ height: '600px' }}
+                      >
+                        <div
+                          style={{
+                            height: `${requestsVirtualizer.getTotalSize()}px`,
+                            width: '100%',
+                            position: 'relative',
+                          }}
+                        >
+                          {requestsVirtualizer.getVirtualItems().map((virtualItem) => {
+                            const summary = filteredRequests[virtualItem.index];
+                            return (
+                              <div
+                                key={summary.requestId}
+                                className="px-4 py-4 hover:bg-gray-50 transition-colors cursor-pointer border-b border-gray-100 absolute top-0 left-0 w-full"
+                                style={{
+                                  transform: `translateY(${virtualItem.start}px)`,
+                                }}
+                                onClick={() => loadRequestDetails(summary.requestId)}
+                              >
+                                <div className="flex items-start justify-between">
+                                  <div className="flex-1 min-w-0 mr-4">
+                                    <div className="flex items-center space-x-3 mb-1">
+                                      <span
+                                        className={`font-mono text-sm font-semibold ${
+                                          summary.model.toLowerCase().includes('opus')
+                                            ? 'text-purple-600'
                                             : summary.model.toLowerCase().includes('sonnet')
-                                            ? 'Sonnet'
-                                            : 'Haiku'}
+                                            ? 'text-blue-600'
+                                            : 'text-green-600'
+                                        }`}
+                                      >
+                                        {summary.model.toLowerCase().includes('opus')
+                                          ? 'Opus'
+                                          : summary.model.toLowerCase().includes('sonnet')
+                                          ? 'Sonnet'
+                                          : 'Haiku'}
+                                      </span>
+                                      {summary.statusCode && (
+                                        <span className="text-xs font-mono">
+                                          {summary.statusCode === 200 && '200'}
                                         </span>
-                                        {summary.statusCode && (
-                                          <span className="text-xs font-mono">
-                                            {summary.statusCode === 200 && '200'}
-                                          </span>
-                                        )}
-                                      </div>
-                                      <div className="text-sm text-gray-600 font-mono truncate mb-2">
-                                        {summary.endpoint}
-                                      </div>
-                                      <div className="flex items-center space-x-3 text-xs">
-                                        {summary.usage && (
-                                          <>
-                                            {(summary.usage.input_tokens || summary.usage.cache_read_input_tokens) && (
-                                              <span className="font-mono text-gray-600">
-                                                <span className="font-medium text-gray-900">
-                                                  {(summary.usage.input_tokens || 0).toLocaleString()}
-                                                </span>{' '}
-                                                in
-                                              </span>
-                                            )}
-                                            {summary.usage.output_tokens && (
-                                              <span className="font-mono text-gray-600">
-                                                <span className="font-medium text-gray-900">
-                                                  {summary.usage.output_tokens.toLocaleString()}
-                                                </span>{' '}
-                                                out
-                                              </span>
-                                            )}
-                                            {summary.usage.cache_read_input_tokens && (
-                                              <span className="font-mono bg-green-50 text-green-700 px-1.5 py-0.5 rounded">
-                                                {Math.round(((summary.usage.cache_read_input_tokens || 0) / ((summary.usage.input_tokens || 0) + (summary.usage.cache_read_input_tokens || 0))) * 100)}% cached
-                                              </span>
-                                            )}
-                                          </>
-                                        )}
-                                        {summary.responseTime && (
-                                          <span className="font-mono text-gray-600">
-                                            <span className="font-medium text-gray-900">{(summary.responseTime / 1000).toFixed(2)}</span>s
-                                          </span>
-                                        )}
-                                      </div>
+                                      )}
                                     </div>
-                                    <div className="flex-shrink-0 text-right">
-                                      <div className="text-xs text-gray-500">
-                                        {new Date(summary.timestamp).toLocaleDateString()}
-                                      </div>
-                                      <div className="text-xs text-gray-400">
-                                        {new Date(summary.timestamp).toLocaleTimeString()}
-                                      </div>
+                                    <div className="text-sm text-gray-600 font-mono truncate mb-2">
+                                      {summary.endpoint}
+                                    </div>
+                                    <div className="flex items-center space-x-3 text-xs">
+                                      {summary.usage && (
+                                        <>
+                                          {(summary.usage.input_tokens || summary.usage.cache_read_input_tokens) && (
+                                            <span className="font-mono text-gray-600">
+                                              <span className="font-medium text-gray-900">
+                                                {(summary.usage.input_tokens || 0).toLocaleString()}
+                                              </span>{' '}
+                                              in
+                                            </span>
+                                          )}
+                                          {summary.usage.output_tokens && (
+                                            <span className="font-mono text-gray-600">
+                                              <span className="font-medium text-gray-900">
+                                                {summary.usage.output_tokens.toLocaleString()}
+                                              </span>{' '}
+                                              out
+                                            </span>
+                                          )}
+                                          {summary.usage.cache_read_input_tokens && (
+                                            <span className="font-mono bg-green-50 text-green-700 px-1.5 py-0.5 rounded">
+                                              {Math.round(((summary.usage.cache_read_input_tokens || 0) / ((summary.usage.input_tokens || 0) + (summary.usage.cache_read_input_tokens || 0))) * 100)}% cached
+                                            </span>
+                                          )}
+                                        </>
+                                      )}
+                                      {summary.responseTime && (
+                                        <span className="font-mono text-gray-600">
+                                          <span className="font-medium text-gray-900">{(summary.responseTime / 1000).toFixed(2)}</span>s
+                                        </span>
+                                      )}
                                     </div>
                                   </div>
-                          </div>
-                        ))}
+                                  <div className="flex-shrink-0 text-right">
+                                    <div className="text-xs text-gray-500">
+                                      {new Date(summary.timestamp).toLocaleDateString()}
+                                    </div>
+                                    <div className="text-xs text-gray-400">
+                                      {new Date(summary.timestamp).toLocaleTimeString()}
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
                       </div>
                     )}
                   </div>
