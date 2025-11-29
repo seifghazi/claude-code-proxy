@@ -210,3 +210,38 @@ type ContentBlock struct {
 	Input json.RawMessage `json:"input,omitempty"`
 	Text  string          `json:"text,omitempty"`
 }
+
+// Dashboard stats structures
+type DashboardStats struct {
+	DailyStats      []DailyTokens   `json:"dailyStats"`
+	HourlyStats     []HourlyTokens  `json:"hourlyStats"`
+	ModelStats      []ModelTokens   `json:"modelStats"`
+	TodayTokens     int64           `json:"todayTokens"`
+	TodayRequests   int             `json:"todayRequests"`
+	AvgResponseTime int64           `json:"avgResponseTime"`
+}
+
+type DailyTokens struct {
+	Date     string                `json:"date"`
+	Tokens   int64                 `json:"tokens"`
+	Requests int                   `json:"requests"`
+	Models   map[string]ModelStats `json:"models,omitempty"` // Per-model breakdown
+}
+
+type HourlyTokens struct {
+	Hour     int                   `json:"hour"`
+	Tokens   int64                 `json:"tokens"`
+	Requests int                   `json:"requests"`
+	Models   map[string]ModelStats `json:"models,omitempty"` // Per-model breakdown
+}
+
+type ModelStats struct {
+	Tokens   int64 `json:"tokens"`
+	Requests int   `json:"requests"`
+}
+
+type ModelTokens struct {
+	Model    string `json:"model"`
+	Tokens   int64  `json:"tokens"`
+	Requests int    `json:"requests"`
+}

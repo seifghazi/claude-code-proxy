@@ -16,4 +16,6 @@ type StorageService interface {
 	GetConfig() *config.StorageConfig
 	GetAllRequests(modelFilter string) ([]*model.RequestLog, error)
 	GetRequestsSummary(modelFilter string) ([]*model.RequestSummary, error)
+	GetRequestsSummaryPaginated(modelFilter, startTime, endTime string, offset, limit int) ([]*model.RequestSummary, int, error)
+	GetStats(startDate, endDate string) (*model.DashboardStats, error)
 }

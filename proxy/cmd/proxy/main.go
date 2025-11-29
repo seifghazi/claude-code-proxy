@@ -66,6 +66,8 @@ func main() {
 	r.HandleFunc("/ui", h.UI).Methods("GET")
 	r.HandleFunc("/api/requests", h.GetRequests).Methods("GET")
 	r.HandleFunc("/api/requests/summary", h.GetRequestsSummary).Methods("GET")
+	r.HandleFunc("/api/requests/{id}", h.GetRequestByID).Methods("GET")
+	r.HandleFunc("/api/stats", h.GetStats).Methods("GET")
 	r.HandleFunc("/api/requests", h.DeleteRequests).Methods("DELETE")
 	r.HandleFunc("/api/conversations", h.GetConversations).Methods("GET")
 	r.HandleFunc("/api/conversations/{id}", h.GetConversationByID).Methods("GET")

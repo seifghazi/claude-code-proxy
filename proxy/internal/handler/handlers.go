@@ -244,7 +244,27 @@ func (h *Handler) GetRequestsSummary(w http.ResponseWriter, r *http.Request) {
 		modelFilter = "all"
 	}
 
-	summaries, err := h.storageService.GetRequestsSummary(modelFilter)
+	// Get start/end time range (UTC ISO 8601 format from browser)
+	startTime := r.URL.Query().Get("start")
+	endTime := r.URL.Query().Get("end")
+
+	// Parse pagination params
+	offset := 0
+	limit := 0 // Default to 0 (no limit - fetch all)
+
+	if offsetStr := r.URL.Query().Get("offset"); offsetStr != "" {
+		if parsed, err := strconv.Atoi(offsetStr); err == nil && parsed >= 0 {
+			offset = parsed
+		}
+	}
+
+	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
+		if parsed, err := strconv.Atoi(limitStr); err == nil && parsed > 0 && parsed <= 100000 {
+			limit = parsed
+		}
+	}
+
+	summaries, total, err := h.storageService.GetRequestsSummaryPaginated(modelFilter, startTime, endTime, offset, limit)
 	if err != nil {
 		log.Printf("Error getting request summaries: %v", err)
 		http.Error(w, "Failed to get requests", http.StatusInternalServerError)
@@ -255,10 +275,71 @@ func (h *Handler) GetRequestsSummary(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(struct {
 		Requests []*model.RequestSummary `json:"requests"`
 		Total    int                     `json:"total"`
+		Offset   int                     `json:"offset"`
+		Limit    int                     `json:"limit"`
 	}{
 		Requests: summaries,
-		Total:    len(summaries),
+		Total:    total,
+		Offset:   offset,
+		Limit:    limit,
 	})
+}
+
+// GetRequestByID returns a single request by its ID
+func (h *Handler) GetRequestByID(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	requestID := vars["id"]
+
+	if requestID == "" {
+		http.Error(w, "Request ID is required", http.StatusBadRequest)
+		return
+	}
+
+	request, fullID, err := h.storageService.GetRequestByShortID(requestID)
+	if err != nil {
+		log.Printf("Error getting request by ID %s: %v", requestID, err)
+		http.Error(w, "Failed to get request", http.StatusInternalServerError)
+		return
+	}
+
+	if request == nil {
+		http.Error(w, "Request not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(struct {
+		Request *model.RequestLog `json:"request"`
+		FullID  string            `json:"fullId"`
+	}{
+		Request: request,
+		FullID:  fullID,
+	})
+}
+
+// GetStats returns aggregated dashboard statistics - lightning fast!
+func (h *Handler) GetStats(w http.ResponseWriter, r *http.Request) {
+	// Get start/end time range (UTC ISO 8601 format from browser)
+	// Browser sends the user's local day boundaries converted to UTC
+	startTime := r.URL.Query().Get("start")
+	endTime := r.URL.Query().Get("end")
+
+	// Fallback to last 7 days if not provided
+	if startTime == "" || endTime == "" {
+		now := time.Now().UTC()
+		endTime = now.Format(time.RFC3339)
+		startTime = now.AddDate(0, 0, -7).Format(time.RFC3339)
+	}
+
+	stats, err := h.storageService.GetStats(startTime, endTime)
+	if err != nil {
+		log.Printf("Error getting stats: %v", err)
+		http.Error(w, "Failed to get stats", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(stats)
 }
 
 func (h *Handler) DeleteRequests(w http.ResponseWriter, r *http.Request) {
