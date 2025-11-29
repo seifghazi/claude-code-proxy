@@ -226,14 +226,35 @@ export default function Index() {
       const targetDate = date || selectedDate;
       const { weekStart, weekEnd } = getWeekBoundaries(targetDate);
 
-      const url = new URL('/api/stats', window.location.origin);
-      url.searchParams.append('start', weekStart.toISOString());
-      url.searchParams.append('end', weekEnd.toISOString());
+      // Format selected date as YYYY-MM-DD for backend
+      const selectedDateStr = targetDate.toISOString().split('T')[0];
 
-      const response = await fetch(url.toString());
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const data = await response.json();
-      setStats(data);
+      // Load weekly stats
+      const weeklyUrl = new URL('/api/stats', window.location.origin);
+      weeklyUrl.searchParams.append('start', weekStart.toISOString());
+      weeklyUrl.searchParams.append('end', weekEnd.toISOString());
+
+      // Load hourly stats for selected date
+      const hourlyUrl = new URL('/api/stats/hourly', window.location.origin);
+      hourlyUrl.searchParams.append('date', selectedDateStr);
+
+      const [weeklyResponse, hourlyResponse] = await Promise.all([
+        fetch(weeklyUrl.toString()),
+        fetch(hourlyUrl.toString())
+      ]);
+
+      if (!weeklyResponse.ok || !hourlyResponse.ok) {
+        throw new Error(`HTTP ${weeklyResponse.status} / ${hourlyResponse.status}`);
+      }
+
+      const weeklyData = await weeklyResponse.json();
+      const hourlyData = await hourlyResponse.json();
+
+      // Merge the responses
+      setStats({
+        ...weeklyData,
+        ...hourlyData
+      });
       setCurrentWeekStart(weekStart);
     } catch (error) {
       console.error('Failed to load stats:', error);

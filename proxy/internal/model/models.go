@@ -213,12 +213,15 @@ type ContentBlock struct {
 
 // Dashboard stats structures
 type DashboardStats struct {
-	DailyStats      []DailyTokens   `json:"dailyStats"`
-	HourlyStats     []HourlyTokens  `json:"hourlyStats"`
-	ModelStats      []ModelTokens   `json:"modelStats"`
-	TodayTokens     int64           `json:"todayTokens"`
-	TodayRequests   int             `json:"todayRequests"`
-	AvgResponseTime int64           `json:"avgResponseTime"`
+	DailyStats []DailyTokens `json:"dailyStats"`
+}
+
+type HourlyStatsResponse struct {
+	HourlyStats     []HourlyTokens `json:"hourlyStats"`
+	ModelStats      []ModelTokens  `json:"modelStats"`
+	TodayTokens     int64          `json:"todayTokens"`
+	TodayRequests   int            `json:"todayRequests"`
+	AvgResponseTime int64          `json:"avgResponseTime"`
 }
 
 type DailyTokens struct {
