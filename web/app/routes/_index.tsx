@@ -202,29 +202,39 @@ export default function Index() {
   const [compareMode, setCompareMode] = useState(false);
   const [selectedForCompare, setSelectedForCompare] = useState<Request[]>([]);
   const [isCompareModalOpen, setIsCompareModalOpen] = useState(false);
+  const [currentWeekStart, setCurrentWeekStart] = useState<Date | null>(null);
+  const [isNavigating, setIsNavigating] = useState(false);
+
+  // Helper to get Sunday-Saturday week boundaries for a given date
+  const getWeekBoundaries = (date: Date) => {
+    const weekStart = new Date(date);
+    weekStart.setHours(0, 0, 0, 0);
+    const dayOfWeek = weekStart.getDay(); // 0 = Sunday
+    weekStart.setDate(weekStart.getDate() - dayOfWeek); // Go back to Sunday
+
+    const weekEnd = new Date(weekStart);
+    weekEnd.setDate(weekEnd.getDate() + 6); // Saturday
+    weekEnd.setHours(23, 59, 59, 999);
+
+    return { weekStart, weekEnd };
+  };
 
   // Load dashboard stats (lightning fast!)
   const loadStats = async (date?: Date) => {
     setIsLoadingStats(true);
     try {
       const targetDate = date || selectedDate;
-
-      // For stats, we need 7 days of data (target date - 6 days through target date)
-      const startDay = new Date(targetDate);
-      startDay.setDate(startDay.getDate() - 6);
-      startDay.setHours(0, 0, 0, 0);
-
-      const endDay = new Date(targetDate);
-      endDay.setHours(23, 59, 59, 999);
+      const { weekStart, weekEnd } = getWeekBoundaries(targetDate);
 
       const url = new URL('/api/stats', window.location.origin);
-      url.searchParams.append('start', startDay.toISOString());
-      url.searchParams.append('end', endDay.toISOString());
+      url.searchParams.append('start', weekStart.toISOString());
+      url.searchParams.append('end', weekEnd.toISOString());
 
       const response = await fetch(url.toString());
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
       setStats(data);
+      setCurrentWeekStart(weekStart);
     } catch (error) {
       console.error('Failed to load stats:', error);
     } finally {
@@ -520,11 +530,33 @@ export default function Index() {
     loadRequests(newFilter, selectedDate);
   };
 
-  const handleDateChange = (newDate: Date) => {
-    setSelectedDate(newDate);
-    loadStats(newDate);
-    if (viewMode === 'requests') {
-      loadRequests(modelFilter, newDate);
+  const handleDateChange = async (newDate: Date) => {
+    // Prevent concurrent navigation
+    if (isNavigating) return;
+
+    setIsNavigating(true);
+
+    try {
+      // Check if we're moving to a different week BEFORE updating state
+      const { weekStart: newWeekStart } = getWeekBoundaries(newDate);
+      const needsNewWeek = !currentWeekStart ||
+        newWeekStart.getTime() !== currentWeekStart.getTime();
+
+      // Update selected date
+      setSelectedDate(newDate);
+
+      // Update currentWeekStart synchronously to prevent race conditions
+      if (needsNewWeek) {
+        setCurrentWeekStart(newWeekStart);
+        await loadStats(newDate);
+      }
+
+      // Always reload requests for the selected date (for hourly chart)
+      if (viewMode === 'requests') {
+        await loadRequests(modelFilter, newDate);
+      }
+    } finally {
+      setIsNavigating(false);
     }
   };
 
@@ -685,14 +717,17 @@ export default function Index() {
                     newDate.setDate(newDate.getDate() - 1);
                     handleDateChange(newDate);
                   }}
-                  className="p-2 rounded-lg hover:bg-gray-100 transition-colors"
+                  disabled={isNavigating}
+                  className="p-2 rounded-lg hover:bg-gray-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <ChevronLeft className="w-4 h-4 text-gray-600" />
                 </button>
-                <span className="text-sm font-medium text-gray-700 min-w-[80px] text-center">
-                  {selectedDate.toDateString() === new Date().toDateString()
-                    ? 'Today'
-                    : selectedDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                <span className={`text-sm font-medium min-w-[80px] text-center ${
+                  selectedDate.toDateString() === new Date().toDateString()
+                    ? 'text-gray-900 font-semibold'
+                    : 'text-gray-700'
+                }`}>
+                  {selectedDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
                 </span>
                 <button
                   onClick={() => {
@@ -706,7 +741,7 @@ export default function Index() {
                       handleDateChange(newDate);
                     }
                   }}
-                  disabled={(() => {
+                  disabled={isNavigating || (() => {
                     const today = new Date();
                     today.setHours(0, 0, 0, 0);
                     const selected = new Date(selectedDate);
