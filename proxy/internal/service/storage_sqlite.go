@@ -606,7 +606,11 @@ func (s *sqliteStorageService) GetStats(startDate, endDate string) (*model.Dashb
 
 		tokens := int64(0)
 		if usage != nil {
-			tokens = int64(usage.InputTokens + usage.OutputTokens + usage.CacheReadInputTokens)
+			tokens = int64(
+				usage.InputTokens +
+					usage.OutputTokens +
+					usage.CacheReadInputTokens +
+					usage.CacheCreationInputTokens)
 		}
 
 		// Daily aggregation
@@ -651,17 +655,8 @@ func (s *sqliteStorageService) GetStats(startDate, endDate string) (*model.Dashb
 	return stats, nil
 }
 
-// GetHourlyStats returns hourly breakdown for a specific date
-func (s *sqliteStorageService) GetHourlyStats(date string) (*model.HourlyStatsResponse, error) {
-	// Parse date to get start and end of day
-	dateObj, err := time.Parse("2006-01-02", date)
-	if err != nil {
-		return nil, fmt.Errorf("invalid date format: %w", err)
-	}
-
-	startOfDay := dateObj.Format("2006-01-02") + "T00:00:00"
-	endOfDay := dateObj.Format("2006-01-02") + "T23:59:59"
-
+// GetHourlyStats returns hourly breakdown for a specific time range
+func (s *sqliteStorageService) GetHourlyStats(startTime, endTime string) (*model.HourlyStatsResponse, error) {
 	query := `
 		SELECT timestamp, COALESCE(model, 'unknown') as model, response
 		FROM requests
@@ -669,7 +664,7 @@ func (s *sqliteStorageService) GetHourlyStats(date string) (*model.HourlyStatsRe
 		ORDER BY timestamp
 	`
 
-	rows, err := s.db.Query(query, startOfDay, endOfDay)
+	rows, err := s.db.Query(query, startTime, endTime)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query hourly stats: %w", err)
 	}
@@ -712,7 +707,11 @@ func (s *sqliteStorageService) GetHourlyStats(date string) (*model.HourlyStatsRe
 
 		tokens := int64(0)
 		if usage != nil {
-			tokens = int64(usage.InputTokens + usage.OutputTokens + usage.CacheReadInputTokens)
+			tokens = int64(
+				usage.InputTokens +
+					usage.OutputTokens +
+					usage.CacheReadInputTokens +
+					usage.CacheCreationInputTokens)
 		}
 
 		totalTokens += tokens
@@ -778,17 +777,8 @@ func (s *sqliteStorageService) GetHourlyStats(date string) (*model.HourlyStatsRe
 	}, nil
 }
 
-// GetModelStats returns model breakdown for a specific date
-func (s *sqliteStorageService) GetModelStats(date string) (*model.ModelStatsResponse, error) {
-	// Parse date to get start and end of day
-	dateObj, err := time.Parse("2006-01-02", date)
-	if err != nil {
-		return nil, fmt.Errorf("invalid date format: %w", err)
-	}
-
-	startOfDay := dateObj.Format("2006-01-02") + "T00:00:00"
-	endOfDay := dateObj.Format("2006-01-02") + "T23:59:59"
-
+// GetModelStats returns model breakdown for a specific time range
+func (s *sqliteStorageService) GetModelStats(startTime, endTime string) (*model.ModelStatsResponse, error) {
 	query := `
 		SELECT timestamp, COALESCE(model, 'unknown') as model, response
 		FROM requests
@@ -796,7 +786,7 @@ func (s *sqliteStorageService) GetModelStats(date string) (*model.ModelStatsResp
 		ORDER BY timestamp
 	`
 
-	rows, err := s.db.Query(query, startOfDay, endOfDay)
+	rows, err := s.db.Query(query, startTime, endTime)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query model stats: %w", err)
 	}
@@ -829,7 +819,11 @@ func (s *sqliteStorageService) GetModelStats(date string) (*model.ModelStatsResp
 
 		tokens := int64(0)
 		if usage != nil {
-			tokens = int64(usage.InputTokens + usage.OutputTokens + usage.CacheReadInputTokens)
+			tokens = int64(
+				usage.InputTokens +
+					usage.OutputTokens +
+					usage.CacheReadInputTokens +
+					usage.CacheCreationInputTokens)
 		}
 
 		// Model aggregation

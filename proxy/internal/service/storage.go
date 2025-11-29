@@ -18,6 +18,6 @@ type StorageService interface {
 	GetRequestsSummary(modelFilter string) ([]*model.RequestSummary, error)
 	GetRequestsSummaryPaginated(modelFilter, startTime, endTime string, offset, limit int) ([]*model.RequestSummary, int, error)
 	GetStats(startDate, endDate string) (*model.DashboardStats, error)
-	GetHourlyStats(date string) (*model.HourlyStatsResponse, error)
-	GetModelStats(date string) (*model.ModelStatsResponse, error)
+	GetHourlyStats(startTime, endTime string) (*model.HourlyStatsResponse, error)
+	GetModelStats(startTime, endTime string) (*model.ModelStatsResponse, error)
 }

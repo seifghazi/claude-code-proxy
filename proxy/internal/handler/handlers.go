@@ -342,16 +342,18 @@ func (h *Handler) GetStats(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(stats)
 }
 
-// GetHourlyStats returns hourly breakdown for a specific date
+// GetHourlyStats returns hourly breakdown for a specific date range
 func (h *Handler) GetHourlyStats(w http.ResponseWriter, r *http.Request) {
-	// Get date parameter (YYYY-MM-DD format)
-	date := r.URL.Query().Get("date")
-	if date == "" {
-		http.Error(w, "date parameter is required", http.StatusBadRequest)
+	// Get start/end time range (UTC ISO 8601 format from browser)
+	startTime := r.URL.Query().Get("start")
+	endTime := r.URL.Query().Get("end")
+
+	if startTime == "" || endTime == "" {
+		http.Error(w, "start and end parameters are required", http.StatusBadRequest)
 		return
 	}
 
-	stats, err := h.storageService.GetHourlyStats(date)
+	stats, err := h.storageService.GetHourlyStats(startTime, endTime)
 	if err != nil {
 		log.Printf("Error getting hourly stats: %v", err)
 		http.Error(w, "Failed to get hourly stats", http.StatusInternalServerError)
@@ -362,16 +364,18 @@ func (h *Handler) GetHourlyStats(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(stats)
 }
 
-// GetModelStats returns model breakdown for a specific date
+// GetModelStats returns model breakdown for a specific date range
 func (h *Handler) GetModelStats(w http.ResponseWriter, r *http.Request) {
-	// Get date parameter (YYYY-MM-DD format)
-	date := r.URL.Query().Get("date")
-	if date == "" {
-		http.Error(w, "date parameter is required", http.StatusBadRequest)
+	// Get start/end time range (UTC ISO 8601 format from browser)
+	startTime := r.URL.Query().Get("start")
+	endTime := r.URL.Query().Get("end")
+
+	if startTime == "" || endTime == "" {
+		http.Error(w, "start and end parameters are required", http.StatusBadRequest)
 		return
 	}
 
-	stats, err := h.storageService.GetModelStats(date)
+	stats, err := h.storageService.GetModelStats(startTime, endTime)
 	if err != nil {
 		log.Printf("Error getting model stats: %v", err)
 		http.Error(w, "Failed to get model stats", http.StatusInternalServerError)

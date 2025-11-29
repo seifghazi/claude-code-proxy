@@ -243,13 +243,28 @@ export default function Index() {
     return response.json();
   };
 
+  // Get UTC timestamps for start and end of local day
+  const getLocalDayBoundaries = (date: Date) => {
+    const startOfDay = new Date(date);
+    startOfDay.setHours(0, 0, 0, 0);
+
+    const endOfDay = new Date(date);
+    endOfDay.setHours(23, 59, 59, 999);
+
+    return {
+      start: startOfDay.toISOString(),
+      end: endOfDay.toISOString()
+    };
+  };
+
   // Load hourly stats only (for date navigation within same week)
   const loadHourlyStats = async (date?: Date) => {
     const targetDate = date || selectedDate;
-    const selectedDateStr = targetDate.toISOString().split('T')[0];
+    const { start, end } = getLocalDayBoundaries(targetDate);
 
     const hourlyUrl = new URL('/api/stats/hourly', window.location.origin);
-    hourlyUrl.searchParams.append('date', selectedDateStr);
+    hourlyUrl.searchParams.append('start', start);
+    hourlyUrl.searchParams.append('end', end);
 
     const response = await fetch(hourlyUrl.toString());
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -260,10 +275,11 @@ export default function Index() {
   // Load model stats only
   const loadModelStats = async (date?: Date) => {
     const targetDate = date || selectedDate;
-    const selectedDateStr = targetDate.toISOString().split('T')[0];
+    const { start, end } = getLocalDayBoundaries(targetDate);
 
     const modelUrl = new URL('/api/stats/models', window.location.origin);
-    modelUrl.searchParams.append('date', selectedDateStr);
+    modelUrl.searchParams.append('start', start);
+    modelUrl.searchParams.append('end', end);
 
     const response = await fetch(modelUrl.toString());
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -938,7 +954,7 @@ export default function Index() {
                                 style={{
                                   transform: `translateY(${virtualItem.start}px)`,
                                 }}
-                                onClick={() => loadRequestDetails(summary.requestId)}
+                                onClick={() => showRequestDetails(summary.requestId)}
                               >
                                 <div className="flex items-start justify-between">
                                   <div className="flex-1 min-w-0 mr-4">
