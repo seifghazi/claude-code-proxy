@@ -219,38 +219,47 @@ export default function Index() {
     return { weekStart, weekEnd };
   };
 
-  // Load dashboard stats (lightning fast!)
+  // Load weekly stats only (for week navigation)
+  const loadWeeklyStats = async (date?: Date) => {
+    const targetDate = date || selectedDate;
+    const { weekStart, weekEnd } = getWeekBoundaries(targetDate);
+
+    const weeklyUrl = new URL('/api/stats', window.location.origin);
+    weeklyUrl.searchParams.append('start', weekStart.toISOString());
+    weeklyUrl.searchParams.append('end', weekEnd.toISOString());
+
+    const response = await fetch(weeklyUrl.toString());
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+    return response.json();
+  };
+
+  // Load hourly stats only (for date navigation within same week)
+  const loadHourlyStats = async (date?: Date) => {
+    const targetDate = date || selectedDate;
+    const selectedDateStr = targetDate.toISOString().split('T')[0];
+
+    const hourlyUrl = new URL('/api/stats/hourly', window.location.origin);
+    hourlyUrl.searchParams.append('date', selectedDateStr);
+
+    const response = await fetch(hourlyUrl.toString());
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+    return response.json();
+  };
+
+  // Load all stats (weekly + hourly)
   const loadStats = async (date?: Date) => {
     setIsLoadingStats(true);
     try {
       const targetDate = date || selectedDate;
-      const { weekStart, weekEnd } = getWeekBoundaries(targetDate);
+      const { weekStart } = getWeekBoundaries(targetDate);
 
-      // Format selected date as YYYY-MM-DD for backend
-      const selectedDateStr = targetDate.toISOString().split('T')[0];
-
-      // Load weekly stats
-      const weeklyUrl = new URL('/api/stats', window.location.origin);
-      weeklyUrl.searchParams.append('start', weekStart.toISOString());
-      weeklyUrl.searchParams.append('end', weekEnd.toISOString());
-
-      // Load hourly stats for selected date
-      const hourlyUrl = new URL('/api/stats/hourly', window.location.origin);
-      hourlyUrl.searchParams.append('date', selectedDateStr);
-
-      const [weeklyResponse, hourlyResponse] = await Promise.all([
-        fetch(weeklyUrl.toString()),
-        fetch(hourlyUrl.toString())
+      const [weeklyData, hourlyData] = await Promise.all([
+        loadWeeklyStats(targetDate),
+        loadHourlyStats(targetDate)
       ]);
 
-      if (!weeklyResponse.ok || !hourlyResponse.ok) {
-        throw new Error(`HTTP ${weeklyResponse.status} / ${hourlyResponse.status}`);
-      }
-
-      const weeklyData = await weeklyResponse.json();
-      const hourlyData = await hourlyResponse.json();
-
-      // Merge the responses
       setStats({
         ...weeklyData,
         ...hourlyData
@@ -566,13 +575,20 @@ export default function Index() {
       // Update selected date
       setSelectedDate(newDate);
 
-      // Update currentWeekStart synchronously to prevent race conditions
       if (needsNewWeek) {
+        // Load both weekly and hourly stats for new week
         setCurrentWeekStart(newWeekStart);
         await loadStats(newDate);
+      } else {
+        // Just load hourly stats for the new date (same week)
+        const hourlyData = await loadHourlyStats(newDate);
+        setStats(prev => ({
+          ...prev,
+          ...hourlyData
+        }));
       }
 
-      // Always reload requests for the selected date (for hourly chart)
+      // Always reload requests for the selected date
       if (viewMode === 'requests') {
         await loadRequests(modelFilter, newDate);
       }
