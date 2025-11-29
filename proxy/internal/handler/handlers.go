@@ -362,6 +362,26 @@ func (h *Handler) GetHourlyStats(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(stats)
 }
 
+// GetModelStats returns model breakdown for a specific date
+func (h *Handler) GetModelStats(w http.ResponseWriter, r *http.Request) {
+	// Get date parameter (YYYY-MM-DD format)
+	date := r.URL.Query().Get("date")
+	if date == "" {
+		http.Error(w, "date parameter is required", http.StatusBadRequest)
+		return
+	}
+
+	stats, err := h.storageService.GetModelStats(date)
+	if err != nil {
+		log.Printf("Error getting model stats: %v", err)
+		http.Error(w, "Failed to get model stats", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(stats)
+}
+
 func (h *Handler) DeleteRequests(w http.ResponseWriter, r *http.Request) {
 
 	clearedCount, err := h.storageService.ClearRequests()

@@ -218,10 +218,13 @@ type DashboardStats struct {
 
 type HourlyStatsResponse struct {
 	HourlyStats     []HourlyTokens `json:"hourlyStats"`
-	ModelStats      []ModelTokens  `json:"modelStats"`
 	TodayTokens     int64          `json:"todayTokens"`
 	TodayRequests   int            `json:"todayRequests"`
 	AvgResponseTime int64          `json:"avgResponseTime"`
+}
+
+type ModelStatsResponse struct {
+	ModelStats []ModelTokens `json:"modelStats"`
 }
 
 type DailyTokens struct {

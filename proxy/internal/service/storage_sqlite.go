@@ -458,7 +458,7 @@ func (s *sqliteStorageService) GetRequestsSummaryPaginated(modelFilter, startTim
 	}
 
 	if startTime != "" && endTime != "" {
-		whereClauses = append(whereClauses, "timestamp >= ? AND timestamp <= ?")
+		whereClauses = append(whereClauses, "datetime(timestamp) >= datetime(?) AND datetime(timestamp) <= datetime(?)")
 		countArgs = append(countArgs, startTime, endTime)
 	}
 
@@ -485,7 +485,7 @@ func (s *sqliteStorageService) GetRequestsSummaryPaginated(modelFilter, startTim
 	}
 
 	if startTime != "" && endTime != "" {
-		queryWhereClauses = append(queryWhereClauses, "timestamp >= ? AND timestamp <= ?")
+		queryWhereClauses = append(queryWhereClauses, "datetime(timestamp) >= datetime(?) AND datetime(timestamp) <= datetime(?)")
 		args = append(args, startTime, endTime)
 	}
 
@@ -565,7 +565,7 @@ func (s *sqliteStorageService) GetStats(startDate, endDate string) (*model.Dashb
 	query := `
 		SELECT timestamp, COALESCE(model, 'unknown') as model, response
 		FROM requests
-		WHERE timestamp >= ? AND timestamp <= ?
+		WHERE datetime(timestamp) >= datetime(?) AND datetime(timestamp) <= datetime(?)
 		ORDER BY timestamp
 	`
 
@@ -665,7 +665,7 @@ func (s *sqliteStorageService) GetHourlyStats(date string) (*model.HourlyStatsRe
 	query := `
 		SELECT timestamp, COALESCE(model, 'unknown') as model, response
 		FROM requests
-		WHERE timestamp >= ? AND timestamp <= ?
+		WHERE datetime(timestamp) >= datetime(?) AND datetime(timestamp) <= datetime(?)
 		ORDER BY timestamp
 	`
 
@@ -676,7 +676,6 @@ func (s *sqliteStorageService) GetHourlyStats(date string) (*model.HourlyStatsRe
 	defer rows.Close()
 
 	hourlyMap := make(map[int]*model.HourlyTokens)
-	modelMap := make(map[string]*model.ModelTokens)
 	var totalTokens int64
 	var totalRequests int
 	var totalResponseTime int64
@@ -757,6 +756,82 @@ func (s *sqliteStorageService) GetHourlyStats(date string) (*model.HourlyStatsRe
 			}
 		}
 
+	}
+
+	// Convert map to slice
+	hourlyStats := make([]model.HourlyTokens, 0)
+	for _, v := range hourlyMap {
+		hourlyStats = append(hourlyStats, *v)
+	}
+
+	// Calculate average response time
+	avgResponseTime := int64(0)
+	if responseCount > 0 {
+		avgResponseTime = totalResponseTime / int64(responseCount)
+	}
+
+	return &model.HourlyStatsResponse{
+		HourlyStats:     hourlyStats,
+		TodayTokens:     totalTokens,
+		TodayRequests:   totalRequests,
+		AvgResponseTime: avgResponseTime,
+	}, nil
+}
+
+// GetModelStats returns model breakdown for a specific date
+func (s *sqliteStorageService) GetModelStats(date string) (*model.ModelStatsResponse, error) {
+	// Parse date to get start and end of day
+	dateObj, err := time.Parse("2006-01-02", date)
+	if err != nil {
+		return nil, fmt.Errorf("invalid date format: %w", err)
+	}
+
+	startOfDay := dateObj.Format("2006-01-02") + "T00:00:00"
+	endOfDay := dateObj.Format("2006-01-02") + "T23:59:59"
+
+	query := `
+		SELECT timestamp, COALESCE(model, 'unknown') as model, response
+		FROM requests
+		WHERE datetime(timestamp) >= datetime(?) AND datetime(timestamp) <= datetime(?)
+		ORDER BY timestamp
+	`
+
+	rows, err := s.db.Query(query, startOfDay, endOfDay)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query model stats: %w", err)
+	}
+	defer rows.Close()
+
+	modelMap := make(map[string]*model.ModelTokens)
+
+	for rows.Next() {
+		var timestamp, modelName, responseJSON string
+
+		if err := rows.Scan(&timestamp, &modelName, &responseJSON); err != nil {
+			continue
+		}
+
+		// Parse response to get usage
+		var resp model.ResponseLog
+		if err := json.Unmarshal([]byte(responseJSON), &resp); err != nil {
+			continue
+		}
+
+		var usage *model.AnthropicUsage
+		if resp.Body != nil {
+			var respBody struct {
+				Usage *model.AnthropicUsage `json:"usage"`
+			}
+			if err := json.Unmarshal(resp.Body, &respBody); err == nil {
+				usage = respBody.Usage
+			}
+		}
+
+		tokens := int64(0)
+		if usage != nil {
+			tokens = int64(usage.InputTokens + usage.OutputTokens + usage.CacheReadInputTokens)
+		}
+
 		// Model aggregation
 		if modelStat, ok := modelMap[modelName]; ok {
 			modelStat.Tokens += tokens
@@ -770,29 +845,14 @@ func (s *sqliteStorageService) GetHourlyStats(date string) (*model.HourlyStatsRe
 		}
 	}
 
-	// Convert maps to slices
-	hourlyStats := make([]model.HourlyTokens, 0)
-	for _, v := range hourlyMap {
-		hourlyStats = append(hourlyStats, *v)
-	}
-
+	// Convert map to slice
 	modelStats := make([]model.ModelTokens, 0)
 	for _, v := range modelMap {
 		modelStats = append(modelStats, *v)
 	}
 
-	// Calculate average response time
-	avgResponseTime := int64(0)
-	if responseCount > 0 {
-		avgResponseTime = totalResponseTime / int64(responseCount)
-	}
-
-	return &model.HourlyStatsResponse{
-		HourlyStats:     hourlyStats,
-		ModelStats:      modelStats,
-		TodayTokens:     totalTokens,
-		TodayRequests:   totalRequests,
-		AvgResponseTime: avgResponseTime,
+	return &model.ModelStatsResponse{
+		ModelStats: modelStats,
 	}, nil
 }
 

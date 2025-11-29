@@ -179,11 +179,14 @@ export function UsageDashboard({ stats, selectedDate = new Date() }: UsageDashbo
     };
   }, [stats, selectedDate]);
 
+  const isToday = selectedDate.toDateString() === new Date().toDateString();
+  const dateLabel = isToday ? 'Today' : selectedDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+
   return (
     <div className="usage-dashboard">
       <div className="usage-main">
         <div className="usage-total">
-          <div className="usage-total-label">Tokens Today</div>
+          <div className="usage-total-label">Tokens {dateLabel}</div>
           <div className="usage-total-value">
             {formatTokens(processedStats.todayTokens)}
             {processedStats.todayTokens >= 1000 && <span className="usage-total-unit">tokens</span>}
