@@ -32,6 +32,8 @@ interface Request {
   headers: Record<string, string[]>;
   originalModel?: string;
   routedModel?: string;
+  apiUrl?: string;
+  provider?: string;
   body?: {
     model?: string;
     messages?: Array<{
@@ -156,6 +158,19 @@ export default function RequestDetailContent({ request, onGrade }: RequestDetail
                 {getChatCompletionsEndpoint(request.routedModel, request.endpoint)}
               </code>
             </div>
+            {request.apiUrl && (
+              <div className="flex items-center space-x-3">
+                <span className="text-gray-500 font-medium min-w-[80px]">API URL:</span>
+                <code className="text-green-600 bg-green-50 px-2 py-1 rounded font-mono text-xs border border-green-200 break-all max-w-[300px]">
+                  {request.apiUrl}
+                </code>
+                {request.provider && (
+                  <span className="text-xs bg-gray-100 text-gray-700 px-2 py-1 rounded-full border border-gray-300">
+                    {request.provider}
+                  </span>
+                )}
+              </div>
+            )}
           </div>
           <div className="space-y-3">
             <div className="flex items-center space-x-3">

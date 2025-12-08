@@ -32,6 +32,10 @@ func (p *AnthropicProvider) Name() string {
 	return "anthropic"
 }
 
+func (p *AnthropicProvider) GetBaseURL() string {
+	return p.config.BaseURL
+}
+
 func (p *AnthropicProvider) ForwardRequest(ctx context.Context, originalReq *http.Request) (*http.Response, error) {
 	// Clone the request to avoid modifying the original
 	proxyReq := originalReq.Clone(ctx)

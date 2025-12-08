@@ -12,4 +12,7 @@ type Provider interface {
 
 	// ForwardRequest forwards a request to the provider's API
 	ForwardRequest(ctx context.Context, req *http.Request) (*http.Response, error)
+
+	// GetBaseURL returns the provider's base API URL
+	GetBaseURL() string
 }

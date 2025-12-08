@@ -76,6 +76,13 @@ func (h *Handler) Messages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create request log with routing information
+	var apiURL string
+	var provider string
+	if decision.Provider != nil {
+		apiURL = decision.Provider.GetBaseURL()
+		provider = decision.Provider.Name()
+	}
+
 	requestLog := &model.RequestLog{
 		RequestID:     requestID,
 		Timestamp:     time.Now().Format(time.RFC3339),
@@ -88,6 +95,8 @@ func (h *Handler) Messages(w http.ResponseWriter, r *http.Request) {
 		RoutedModel:   decision.TargetModel,
 		UserAgent:     r.Header.Get("User-Agent"),
 		ContentType:   r.Header.Get("Content-Type"),
+		APIURL:        apiURL,
+		Provider:      provider,
 	}
 
 	if _, err := h.storageService.SaveRequest(requestLog); err != nil {

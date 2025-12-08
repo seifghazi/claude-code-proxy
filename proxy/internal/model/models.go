@@ -36,6 +36,8 @@ type RequestLog struct {
 	RoutedModel   string              `json:"routedModel,omitempty"`
 	UserAgent     string              `json:"userAgent"`
 	ContentType   string              `json:"contentType"`
+	APIURL        string              `json:"apiUrl,omitempty"`
+	Provider      string              `json:"provider,omitempty"`
 	PromptGrade   *PromptGrade        `json:"promptGrade,omitempty"`
 	Response      *ResponseLog        `json:"response,omitempty"`
 }
