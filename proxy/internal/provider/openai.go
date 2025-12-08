@@ -35,6 +35,10 @@ func (p *OpenAIProvider) Name() string {
 	return "openai"
 }
 
+func (p *OpenAIProvider) GetBaseURL() string {
+	return p.config.BaseURL
+}
+
 func (p *OpenAIProvider) ForwardRequest(ctx context.Context, originalReq *http.Request) (*http.Response, error) {
 	// First, we need to convert the Anthropic request to OpenAI format
 	bodyBytes, err := io.ReadAll(originalReq.Body)
