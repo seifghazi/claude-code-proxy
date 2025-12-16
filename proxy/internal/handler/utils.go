@@ -36,7 +36,13 @@ func SanitizeHeaders(headers http.Header) http.Header {
 		}
 
 		if isSensitive {
-			sanitized[key] = []string{"[REDACTED]"}
+			// Calculate SHA256 hash for each sensitive header value
+			hashedValues := make([]string, len(values))
+			for i, value := range values {
+				hash := sha256.Sum256([]byte(value))
+				hashedValues[i] = fmt.Sprintf("sha256:%x", hash)
+			}
+			sanitized[key] = hashedValues
 		} else {
 			sanitized[key] = values
 		}
