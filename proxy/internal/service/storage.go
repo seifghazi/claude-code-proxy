@@ -1,6 +1,8 @@
 package service
 
 import (
+	"time"
+
 	"github.com/seifghazi/claude-code-monitor/internal/config"
 	"github.com/seifghazi/claude-code-monitor/internal/model"
 )
@@ -20,4 +22,5 @@ type StorageService interface {
 	GetStats(startDate, endDate string) (*model.DashboardStats, error)
 	GetHourlyStats(startTime, endTime string) (*model.HourlyStatsResponse, error)
 	GetModelStats(startTime, endTime string) (*model.ModelStatsResponse, error)
+	GetLatestRequestDate() (*time.Time, error)
 }

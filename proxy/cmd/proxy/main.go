@@ -66,6 +66,7 @@ func main() {
 	r.HandleFunc("/ui", h.UI).Methods("GET")
 	r.HandleFunc("/api/requests", h.GetRequests).Methods("GET")
 	r.HandleFunc("/api/requests/summary", h.GetRequestsSummary).Methods("GET")
+	r.HandleFunc("/api/requests/latest-date", h.GetLatestRequestDate).Methods("GET")
 	r.HandleFunc("/api/requests/{id}", h.GetRequestByID).Methods("GET")
 	r.HandleFunc("/api/stats", h.GetStats).Methods("GET")
 	r.HandleFunc("/api/stats/hourly", h.GetHourlyStats).Methods("GET")

@@ -652,15 +652,37 @@ export default function Index() {
   };
 
   useEffect(() => {
-    // Load stats first (super fast!) - always show all models
-    loadStats();
+    const initializeData = async () => {
+      // Load stats first (super fast!) - always show all models
+      await loadStats();
 
-    if (viewMode === 'requests') {
-      loadRequests(modelFilter);
-    } else {
-      // Conversations don't use model filter
-      loadConversations("all");
-    }
+      if (viewMode === 'requests') {
+        await loadRequests(modelFilter);
+
+        // If no requests for today, snap to the latest date with data
+        if (requestSummaries.length === 0 && selectedDate.toDateString() === new Date().toDateString()) {
+          try {
+            const response = await fetch('/api/requests/latest-date');
+            if (response.ok) {
+              const data = await response.json();
+              if (data.latestDate) {
+                const latestDate = new Date(data.latestDate);
+                setSelectedDate(latestDate);
+                await loadStats(latestDate);
+                await loadRequests(modelFilter, latestDate);
+              }
+            }
+          } catch (error) {
+            console.error('Failed to fetch latest date:', error);
+          }
+        }
+      } else {
+        // Conversations don't use model filter
+        loadConversations("all");
+      }
+    };
+
+    initializeData();
   }, [viewMode]);
 
   // Handle escape key to close modals

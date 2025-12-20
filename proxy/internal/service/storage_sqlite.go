@@ -850,6 +850,25 @@ func (s *sqliteStorageService) GetModelStats(startTime, endTime string) (*model.
 	}, nil
 }
 
+// GetLatestRequestDate returns the timestamp of the most recent request
+func (s *sqliteStorageService) GetLatestRequestDate() (*time.Time, error) {
+	var timestamp string
+	err := s.db.QueryRow("SELECT timestamp FROM requests ORDER BY timestamp DESC LIMIT 1").Scan(&timestamp)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to query latest request: %w", err)
+	}
+
+	t, err := time.Parse(time.RFC3339, timestamp)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse timestamp: %w", err)
+	}
+
+	return &t, nil
+}
+
 func (s *sqliteStorageService) Close() error {
 	return s.db.Close()
 }

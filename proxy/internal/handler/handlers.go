@@ -386,6 +386,23 @@ func (h *Handler) GetModelStats(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(stats)
 }
 
+// GetLatestRequestDate returns the date of the most recent request
+func (h *Handler) GetLatestRequestDate(w http.ResponseWriter, r *http.Request) {
+	latestDate, err := h.storageService.GetLatestRequestDate()
+	if err != nil {
+		log.Printf("Error getting latest request date: %v", err)
+		http.Error(w, "Failed to get latest request date", http.StatusInternalServerError)
+		return
+	}
+
+	response := map[string]interface{}{
+		"latestDate": latestDate,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
 func (h *Handler) DeleteRequests(w http.ResponseWriter, r *http.Request) {
 
 	clearedCount, err := h.storageService.ClearRequests()
