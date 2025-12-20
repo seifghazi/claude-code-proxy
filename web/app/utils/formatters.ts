@@ -55,7 +55,7 @@ export function formatLargeText(text: string): string {
   const escaped = escapeHtml(text);
 
   // Simple, safe formatting - just handle line breaks and basic markdown
-  return escaped
+  const formatted = escaped
     // Preserve existing double line breaks as paragraph breaks
     .replace(/\n\n/g, '</p><p class="mt-3">')
     // Convert single line breaks to <br> tags
@@ -65,9 +65,10 @@ export function formatLargeText(text: string): string {
     // Format bold text
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     // Format italic text
-    .replace(/\*([^*]+)\*/g, '<em>$1</em>')
-    // Wrap in paragraph
-    .replace(/^(.*)$/, '<p>$1</p>');
+    .replace(/\*([^*]+)\*/g, '<em>$1</em>');
+
+  // Wrap in paragraph tags
+  return `<p>${formatted}</p>`;
 }
 
 /**

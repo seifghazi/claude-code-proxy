@@ -88,12 +88,16 @@ export function CodeViewer({ code, fileName, language }: CodeViewerProps) {
     const escapeHtml = (str: string) => str
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
 
     // Define token patterns with priorities (first match wins)
     // Order matters: strings and comments first to avoid highlighting inside them
     const tokenPatterns = [
-      { regex: /(["'`])(?:(?=(\\?))\2.)*?\1/, className: 'text-green-400' },      // strings
+      { regex: /"(?:[^"\\]|\\.)*"/, className: 'text-green-400' },                 // double-quoted strings
+      { regex: /'(?:[^'\\]|\\.)*'/, className: 'text-green-400' },                 // single-quoted strings
+      { regex: /`(?:[^`\\]|\\.)*`/, className: 'text-green-400' },                 // backtick strings
       { regex: /\/\/.*$/, className: 'text-gray-500 italic' },                     // single-line comments
       { regex: /\/\*[\s\S]*?\*\//, className: 'text-gray-500 italic' },           // multi-line comments
       { regex: /#.*$/, className: 'text-gray-500 italic' },                        // hash comments
