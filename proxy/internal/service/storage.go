@@ -1,6 +1,8 @@
 package service
 
 import (
+	"time"
+
 	"github.com/seifghazi/claude-code-monitor/internal/config"
 	"github.com/seifghazi/claude-code-monitor/internal/model"
 )
@@ -15,4 +17,10 @@ type StorageService interface {
 	GetRequestByShortID(shortID string) (*model.RequestLog, string, error)
 	GetConfig() *config.StorageConfig
 	GetAllRequests(modelFilter string) ([]*model.RequestLog, error)
+	GetRequestsSummary(modelFilter string) ([]*model.RequestSummary, error)
+	GetRequestsSummaryPaginated(modelFilter, startTime, endTime string, offset, limit int) ([]*model.RequestSummary, int, error)
+	GetStats(startDate, endDate string) (*model.DashboardStats, error)
+	GetHourlyStats(startTime, endTime string) (*model.HourlyStatsResponse, error)
+	GetModelStats(startTime, endTime string) (*model.ModelStatsResponse, error)
+	GetLatestRequestDate() (*time.Time, error)
 }

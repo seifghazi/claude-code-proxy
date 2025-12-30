@@ -25,7 +25,6 @@ type ModelRouter struct {
 	providers          map[string]provider.Provider
 	subagentMappings   map[string]string             // agentName -> targetModel
 	customAgentPrompts map[string]SubagentDefinition // promptHash -> definition
-	modelProviderMap   map[string]string             // model -> provider mapping
 	logger             *log.Logger
 }
 
@@ -42,7 +41,6 @@ func NewModelRouter(cfg *config.Config, providers map[string]provider.Provider, 
 		providers:          providers,
 		subagentMappings:   cfg.Subagents.Mappings,
 		customAgentPrompts: make(map[string]SubagentDefinition),
-		modelProviderMap:   initializeModelProviderMap(),
 		logger:             logger,
 	}
 
@@ -56,63 +54,6 @@ func NewModelRouter(cfg *config.Config, providers map[string]provider.Provider, 
 		logger.Println("")
 	}
 	return router
-}
-
-// initializeModelProviderMap creates a mapping of model names to their providers
-func initializeModelProviderMap() map[string]string {
-	modelMap := make(map[string]string)
-
-	// OpenAI models
-	openaiModels := []string{
-		// GPT-5 family
-		"gpt-5", "gpt-5-mini", "gpt-5-nano",
-
-		// GPT-4.1 family
-		"gpt-4.1", "gpt-4.1-2025-04-14",
-		"gpt-4.1-mini", "gpt-4.1-mini-2025-04-14",
-		"gpt-4.1-nano", "gpt-4.1-nano-2025-04-14",
-
-		// GPT-4.5
-		"gpt-4.5-preview", "gpt-4.5-preview-2025-02-27",
-
-		// GPT-4o variants
-		"gpt-4o", "gpt-4o-2024-08-06",
-		"gpt-4o-mini", "gpt-4o-mini-2024-07-18",
-
-		// GPT-3.5 variants
-		"gpt-3.5-turbo", "gpt-3.5-turbo-0125", "gpt-3.5-turbo-1106", "gpt-3.5-turbo-instruct",
-
-		// O1 series
-		"o1", "o1-2024-12-17",
-		"o1-pro", "o1-pro-2025-03-19",
-		"o1-mini", "o1-mini-2024-09-12",
-
-		// O3 series
-		"o3-pro", "o3-pro-2025-06-10",
-		"o3", "o3-2025-04-16",
-		"o3-mini", "o3-mini-2025-01-31",
-	}
-
-	for _, model := range openaiModels {
-		modelMap[model] = "openai"
-	}
-
-	// Anthropic models
-	anthropicModels := []string{
-		"claude-opus-4-1-20250805",
-		"claude-opus-4-20250514",
-		"claude-sonnet-4-20250514",
-		"claude-sonnet-4-5-20250929",
-		"claude-opus-4-5-20251101",
-		"claude-3-7-sonnet-20250219",
-		"claude-3-5-haiku-20241022",
-	}
-
-	for _, model := range anthropicModels {
-		modelMap[model] = "anthropic"
-	}
-
-	return modelMap
 }
 
 // extractStaticPrompt extracts the portion before "Notes:" if it exists
@@ -265,11 +206,21 @@ func (r *ModelRouter) hashString(s string) string {
 }
 
 func (r *ModelRouter) getProviderNameForModel(model string) string {
-	if provider, exists := r.modelProviderMap[model]; exists {
-		return provider
+	modelLower := strings.ToLower(model)
+
+	// Anthropic models: claude-*
+	if strings.HasPrefix(modelLower, "claude") {
+		return "anthropic"
 	}
 
-	// Default to anthropic
+	// OpenAI models: gpt-*, o1*, o3*
+	if strings.HasPrefix(modelLower, "gpt") ||
+		strings.HasPrefix(modelLower, "o1") ||
+		strings.HasPrefix(modelLower, "o3") {
+		return "openai"
+	}
+
+	// Default to anthropic for unknown models
 	r.logger.Printf("⚠️  Model '%s' doesn't match any known patterns, defaulting to anthropic", model)
 	return "anthropic"
 }

@@ -1,12 +1,14 @@
 import type { MetaFunction } from "@remix-run/node";
-import { useState, useEffect, useTransition } from "react";
-import { 
-  Activity, 
-  RefreshCw, 
-  Trash2, 
+import { useState, useEffect, useTransition, useCallback, useRef } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import {
+  Activity,
+  RefreshCw,
+  Trash2,
   List,
   FileText,
   X,
+  ChevronLeft,
   ChevronRight,
   ChevronDown,
   Inbox,
@@ -29,11 +31,16 @@ import {
   Check,
   Lightbulb,
   Loader2,
-  ArrowLeftRight
+  ArrowLeftRight,
+  GitCompare,
+  Square,
+  CheckSquare
 } from "lucide-react";
 
 import RequestDetailContent from "../components/RequestDetailContent";
 import { ConversationThread } from "../components/ConversationThread";
+import { RequestCompareModal } from "../components/RequestCompareModal";
+import { UsageDashboard } from "../components/UsageDashboard";
 import { getChatCompletionsEndpoint } from "../utils/models";
 
 export const meta: MetaFunction = () => {
@@ -43,8 +50,30 @@ export const meta: MetaFunction = () => {
   ];
 };
 
+// Lightweight summary for list view (fast loading)
+interface RequestSummary {
+  id: string;
+  requestId: string;
+  timestamp: string;
+  method: string;
+  endpoint: string;
+  model?: string;
+  originalModel?: string;
+  routedModel?: string;
+  statusCode?: number;
+  responseTime?: number;
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    cache_creation_input_tokens?: number;
+    cache_read_input_tokens?: number;
+  };
+}
+
+// Full request details (loaded on demand)
 interface Request {
   id: number;
+  requestId?: string;
   conversationId?: string;
   turnNumber?: number;
   isRoot?: boolean;
@@ -138,8 +167,27 @@ interface Conversation {
   messageCount: number;
 }
 
+interface DashboardStats {
+  dailyStats: { date: string; tokens: number; requests: number; models?: Record<string, ModelStats>; }[];
+  hourlyStats?: { hour: number; tokens: number; requests: number; models?: Record<string, ModelStats>; }[];
+  modelStats?: { model: string; tokens: number; requests: number; }[];
+  todayTokens?: number;
+  todayRequests?: number;
+  avgResponseTime?: number;
+}
+
+interface ModelStats {
+  tokens: number;
+  requests: number;
+}
+
 export default function Index() {
-  const [requests, setRequests] = useState<Request[]>([]);
+  const [requestSummaries, setRequestSummaries] = useState<RequestSummary[]>([]);
+  const [requestDetailsCache, setRequestDetailsCache] = useState<Map<string, Request>>(new Map());
+  const [fullRequestsLoaded, setFullRequestsLoaded] = useState(false);
+  const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [isLoadingStats, setIsLoadingStats] = useState(false);
+  const [selectedDate, setSelectedDate] = useState<Date>(new Date());
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [selectedRequest, setSelectedRequest] = useState<Request | null>(null);
   const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null);
@@ -156,46 +204,189 @@ export default function Index() {
   const [hasMoreConversations, setHasMoreConversations] = useState(true);
   const itemsPerPage = 50;
 
-  const loadRequests = async (filter?: string, loadMore = false) => {
+  // Compare mode state
+  const [compareMode, setCompareMode] = useState(false);
+  const [selectedForCompare, setSelectedForCompare] = useState<Request[]>([]);
+  const [isCompareModalOpen, setIsCompareModalOpen] = useState(false);
+  const [currentWeekStart, setCurrentWeekStart] = useState<Date | null>(null);
+  const [isNavigating, setIsNavigating] = useState(false);
+
+  // Virtualization ref for requests list
+  const requestsParentRef = useRef<HTMLDivElement>(null);
+
+  // Helper to get Sunday-Saturday week boundaries for a given date
+  const getWeekBoundaries = (date: Date) => {
+    const weekStart = new Date(date);
+    weekStart.setHours(0, 0, 0, 0);
+    const dayOfWeek = weekStart.getDay(); // 0 = Sunday
+    weekStart.setDate(weekStart.getDate() - dayOfWeek); // Go back to Sunday
+
+    const weekEnd = new Date(weekStart);
+    weekEnd.setDate(weekEnd.getDate() + 6); // Saturday
+    weekEnd.setHours(23, 59, 59, 999);
+
+    return { weekStart, weekEnd };
+  };
+
+  // Load weekly stats only (for week navigation)
+  const loadWeeklyStats = async (date?: Date) => {
+    const targetDate = date || selectedDate;
+    const { weekStart, weekEnd } = getWeekBoundaries(targetDate);
+
+    const weeklyUrl = new URL('/api/stats', window.location.origin);
+    weeklyUrl.searchParams.append('start', weekStart.toISOString());
+    weeklyUrl.searchParams.append('end', weekEnd.toISOString());
+
+    const response = await fetch(weeklyUrl.toString());
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+    return response.json();
+  };
+
+  // Get UTC timestamps for start and end of local day
+  const getLocalDayBoundaries = (date: Date) => {
+    const startOfDay = new Date(date);
+    startOfDay.setHours(0, 0, 0, 0);
+
+    const endOfDay = new Date(date);
+    endOfDay.setHours(23, 59, 59, 999);
+
+    return {
+      start: startOfDay.toISOString(),
+      end: endOfDay.toISOString()
+    };
+  };
+
+  // Load hourly stats only (for date navigation within same week)
+  const loadHourlyStats = async (date?: Date) => {
+    const targetDate = date || selectedDate;
+    const { start, end } = getLocalDayBoundaries(targetDate);
+
+    const hourlyUrl = new URL('/api/stats/hourly', window.location.origin);
+    hourlyUrl.searchParams.append('start', start);
+    hourlyUrl.searchParams.append('end', end);
+
+    const response = await fetch(hourlyUrl.toString());
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+    return response.json();
+  };
+
+  // Load model stats only
+  const loadModelStats = async (date?: Date) => {
+    const targetDate = date || selectedDate;
+    const { start, end } = getLocalDayBoundaries(targetDate);
+
+    const modelUrl = new URL('/api/stats/models', window.location.origin);
+    modelUrl.searchParams.append('start', start);
+    modelUrl.searchParams.append('end', end);
+
+    const response = await fetch(modelUrl.toString());
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+    return response.json();
+  };
+
+  // Load all stats (weekly + hourly + models)
+  const loadStats = async (date?: Date) => {
+    setIsLoadingStats(true);
+    try {
+      const targetDate = date || selectedDate;
+      const { weekStart } = getWeekBoundaries(targetDate);
+
+      const [weeklyData, hourlyData, modelData] = await Promise.all([
+        loadWeeklyStats(targetDate),
+        loadHourlyStats(targetDate),
+        loadModelStats(targetDate)
+      ]);
+
+      setStats({
+        ...weeklyData,
+        ...hourlyData,
+        ...modelData
+      });
+      setCurrentWeekStart(weekStart);
+    } catch (error) {
+      console.error('Failed to load stats:', error);
+    } finally {
+      setIsLoadingStats(false);
+    }
+  };
+
+  // Load lightweight summaries for the list view (fast initial load)
+  const loadRequests = async (filter?: string, date?: Date) => {
     setIsFetching(true);
-    const pageToFetch = loadMore ? requestsCurrentPage + 1 : 1;
+    setFullRequestsLoaded(false);
+    setRequestDetailsCache(new Map());
     try {
       const currentModelFilter = filter || modelFilter;
-      const url = new URL('/api/requests', window.location.origin);
-      url.searchParams.append("page", pageToFetch.toString());
-      url.searchParams.append("limit", itemsPerPage.toString());
+      const targetDate = date || selectedDate;
+
+      // Get start and end of day in user's local timezone, then convert to UTC
+      const startOfDay = new Date(targetDate);
+      startOfDay.setHours(0, 0, 0, 0);
+
+      const endOfDay = new Date(targetDate);
+      endOfDay.setHours(23, 59, 59, 999);
+
+      // Use summary endpoint - much faster, minimal data
+      const url = new URL('/api/requests/summary', window.location.origin);
       if (currentModelFilter !== "all") {
         url.searchParams.append("model", currentModelFilter);
       }
+      url.searchParams.append("start", startOfDay.toISOString());
+      url.searchParams.append("end", endOfDay.toISOString());
+      // Load ALL requests - virtualization will handle rendering efficiently
 
       const response = await fetch(url.toString());
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
-      
+
       const data = await response.json();
       const requests = data.requests || [];
       const mappedRequests = requests.map((req: any, index: number) => ({
         ...req,
-        id: req.requestId ? `${req.requestId}_${index}` : `request_${index}` 
+        id: req.requestId || `request_${index}`
       }));
-      
+
       startTransition(() => {
-        if (loadMore) {
-          setRequests(prev => [...prev, ...mappedRequests]);
-        } else {
-          setRequests(mappedRequests);
-        }
-        setRequestsCurrentPage(pageToFetch);
-        setHasMoreRequests(mappedRequests.length === itemsPerPage);
+        setRequestSummaries(mappedRequests);
       });
     } catch (error) {
       console.error('Failed to load requests:', error);
       startTransition(() => {
-        setRequests([]);
+        setRequestSummaries([]);
       });
     } finally {
       setIsFetching(false);
+    }
+  };
+
+  // Get full request details from cache or fetch on demand
+  const getRequestDetails = async (requestId: string): Promise<Request | null> => {
+    // Check cache first
+    if (requestDetailsCache.has(requestId)) {
+      return requestDetailsCache.get(requestId) || null;
+    }
+
+    // Fetch single request by ID
+    try {
+      const response = await fetch(`/api/requests/${requestId}`);
+      if (!response.ok) return null;
+
+      const data = await response.json();
+      const request = data.request ? { ...data.request, id: data.request.requestId } : null;
+
+      // Cache it
+      if (request) {
+        setRequestDetailsCache(prev => new Map(prev).set(requestId, request));
+      }
+
+      return request;
+    } catch (error) {
+      console.error('Failed to load request details:', error);
+      return null;
     }
   };
 
@@ -257,7 +448,8 @@ export default function Index() {
       });
       
       if (response.ok) {
-        setRequests([]);
+        setRequestSummaries([]);
+        setRequestDetailsCache(new Map());
         setConversations([]);
         setRequestsCurrentPage(1);
         setHasMoreRequests(true);
@@ -266,14 +458,15 @@ export default function Index() {
       }
     } catch (error) {
       console.error('Failed to clear requests:', error);
-      setRequests([]);
+      setRequestSummaries([]);
+      setRequestDetailsCache(new Map());
     }
   };
 
   const filterRequests = (filter: string) => {
-    if (filter === 'all') return requests;
-    
-    return requests.filter(req => {
+    if (filter === 'all') return requestSummaries;
+
+    return requestSummaries.filter(req => {
       switch (filter) {
         case 'messages':
           return req.endpoint.includes('/messages');
@@ -342,8 +535,8 @@ export default function Index() {
     return parts.length > 0 ? parts.join(' • ') : '📡 API request';
   };
 
-  const showRequestDetails = (requestId: number) => {
-    const request = requests.find(r => r.id === requestId);
+  const showRequestDetails = async (requestId: string) => {
+    const request = await getRequestDetails(requestId);
     if (request) {
       setSelectedRequest(request);
       setIsModalOpen(true);
@@ -355,60 +548,40 @@ export default function Index() {
     setSelectedRequest(null);
   };
 
-  const getToolStats = () => {
-    let toolDefinitions = 0;
-    let toolCalls = 0;
-    
-    requests.forEach(req => {
-      if (req.body) {
-        // Count tool definitions in system prompts
-        if (req.body.system) {
-          req.body.system.forEach(sys => {
-            if (sys.text && sys.text.includes('<functions>')) {
-              const functionMatches = [...sys.text.matchAll(/<function>([\s\S]*?)<\/function>/g)];
-              toolDefinitions += functionMatches.length;
-            }
-          });
-        }
-        
-        // Count actual tool calls in messages
-        if (req.body.messages) {
-          req.body.messages.forEach(msg => {
-            if (msg.content && Array.isArray(msg.content)) {
-              msg.content.forEach((contentPart: any) => {
-                if (contentPart.type === 'tool_use') {
-                  toolCalls++;
-                }
-                if (contentPart.type === 'text' && contentPart.text && contentPart.text.includes('<functions>')) {
-                  const functionMatches = [...contentPart.text.matchAll(/<function>([\s\S]*?)<\/function>/g)];
-                  toolDefinitions += functionMatches.length;
-                }
-              });
-            }
-          });
-        }
-      }
-    });
-    
-    return `${toolCalls} calls / ${toolDefinitions} tools`;
+  // Compare mode functions
+  const toggleCompareMode = () => {
+    setCompareMode(!compareMode);
+    setSelectedForCompare([]);
   };
 
-  const getPromptGradeStats = () => {
-    let totalGrades = 0;
-    let gradeCount = 0;
-    
-    requests.forEach(req => {
-      if (req.promptGrade && req.promptGrade.score) {
-        totalGrades += req.promptGrade.score;
-        gradeCount++;
+  const toggleRequestSelection = async (summary: RequestSummary) => {
+    // Get full request details for compare
+    const request = await getRequestDetails(summary.requestId);
+    if (!request) return;
+
+    setSelectedForCompare(prev => {
+      const isSelected = prev.some(r => r.requestId === request.requestId);
+      if (isSelected) {
+        return prev.filter(r => r.requestId !== request.requestId);
+      } else if (prev.length < 2) {
+        return [...prev, request];
       }
+      return prev;
     });
-    
-    if (gradeCount > 0) {
-      const avgGrade = (totalGrades / gradeCount).toFixed(1);
-      return `${avgGrade}/5`;
+  };
+
+  const isRequestSelected = (summary: RequestSummary) => {
+    return selectedForCompare.some(r => r.requestId === summary.requestId);
+  };
+
+  const openCompareModal = () => {
+    if (selectedForCompare.length === 2) {
+      setIsCompareModalOpen(true);
     }
-    return '-/5';
+  };
+
+  const closeCompareModal = () => {
+    setIsCompareModalOpen(false);
   };
 
   const formatDuration = (milliseconds: number) => {
@@ -421,90 +594,130 @@ export default function Index() {
     }
   };
 
-  const formatConversationSummary = (conversation: ConversationSummary) => {
-    const duration = formatDuration(conversation.duration);
-    return `${conversation.requestCount} requests • ${duration} duration`;
-  };
-
-  const canGradeRequest = (request: Request) => {
-    return request.body && 
-           request.body.messages && 
-           request.body.messages.some(msg => msg.role === 'user') &&
-           request.endpoint.includes('/messages');
-  };
-
-  const gradeRequest = async (requestId: number) => {
-    const request = requests.find(r => r.id === requestId);
-    if (!request || !canGradeRequest(request)) return;
-
-    try {
-      const response = await fetch('/api/grade-prompt', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          messages: request.body!.messages,
-          systemMessages: request.body!.system || [],
-          requestId: request.timestamp
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const promptGrade = await response.json();
-      
-      // Update the request with the new grading
-      const updatedRequests = requests.map(r => 
-        r.id === requestId ? { ...r, promptGrade } : r
-      );
-      setRequests(updatedRequests);
-      
-    } catch (error) {
-      console.error('Failed to grade prompt:', error);
-    }
-  };
-
   const handleModelFilterChange = (newFilter: string) => {
     setModelFilter(newFilter);
-    if (viewMode === 'requests') {
-      loadRequests(newFilter);
-    } else {
-      loadConversations(newFilter);
+    // Only reload requests list, not stats (stats always show all models)
+    loadRequests(newFilter, selectedDate);
+  };
+
+  const handleDateChange = async (newDate: Date) => {
+    // Prevent concurrent navigation
+    if (isNavigating) {
+      return;
+    }
+
+    setIsNavigating(true);
+
+    try {
+      // Check if we're moving to a different week BEFORE updating state
+      const { weekStart: newWeekStart } = getWeekBoundaries(newDate);
+      const needsNewWeek = !currentWeekStart ||
+        newWeekStart.getTime() !== currentWeekStart.getTime();
+
+      // Update selected date
+      setSelectedDate(newDate);
+
+      if (needsNewWeek) {
+        // Load weekly, hourly, and model stats for new week
+        setCurrentWeekStart(newWeekStart);
+        await loadStats(newDate);
+      } else {
+        // Just load hourly and model stats for the new date (same week)
+        const [hourlyData, modelData] = await Promise.all([
+          loadHourlyStats(newDate),
+          loadModelStats(newDate)
+        ]);
+
+        if (hourlyData && modelData) {
+          setStats(prev => {
+            if (!prev) return { dailyStats: [], ...hourlyData, ...modelData };
+            return {
+              ...prev,
+              ...hourlyData,
+              ...modelData
+            };
+          });
+        }
+      }
+
+      // Reload requests for the selected date
+      if (viewMode === 'requests') {
+        loadRequests(modelFilter, newDate);
+      }
+    } catch (error) {
+      console.error('Error in handleDateChange:', error);
+    } finally {
+      setIsNavigating(false);
     }
   };
 
   useEffect(() => {
-    if (viewMode === 'requests') {
-      loadRequests(modelFilter);
-    } else {
-      loadConversations(modelFilter);
-    }
-  }, [viewMode, modelFilter]);
+    const initializeData = async () => {
+      // Load stats first (super fast!) - always show all models
+      await loadStats();
+
+      if (viewMode === 'requests') {
+        await loadRequests(modelFilter);
+
+        // If no requests for today, snap to the latest date with data
+        if (requestSummaries.length === 0 && selectedDate.toDateString() === new Date().toDateString()) {
+          try {
+            const response = await fetch('/api/requests/latest-date');
+            if (response.ok) {
+              const data = await response.json();
+              if (data.latestDate) {
+                const latestDate = new Date(data.latestDate);
+                setSelectedDate(latestDate);
+                await loadStats(latestDate);
+                await loadRequests(modelFilter, latestDate);
+              }
+            }
+          } catch (error) {
+            console.error('Failed to fetch latest date:', error);
+          }
+        }
+      } else {
+        // Conversations don't use model filter
+        loadConversations("all");
+      }
+    };
+
+    initializeData();
+  }, [viewMode]);
 
   // Handle escape key to close modals
   useEffect(() => {
     const handleEscapeKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        if (isModalOpen) {
+        if (isCompareModalOpen) {
+          closeCompareModal();
+        } else if (isModalOpen) {
           closeModal();
         } else if (isConversationModalOpen) {
           setIsConversationModalOpen(false);
           setSelectedConversation(null);
+        } else if (compareMode) {
+          toggleCompareMode();
         }
       }
     };
 
     window.addEventListener('keydown', handleEscapeKey);
-    
+
     return () => {
       window.removeEventListener('keydown', handleEscapeKey);
     };
-  }, [isModalOpen, isConversationModalOpen]);
+  }, [isModalOpen, isConversationModalOpen, isCompareModalOpen, compareMode]);
 
   const filteredRequests = filterRequests(filter);
+
+  // Set up virtualizer for requests list with dedicated scroll container
+  const requestsVirtualizer = useVirtualizer({
+    count: filteredRequests.length,
+    getScrollElement: () => requestsParentRef.current,
+    estimateSize: () => 120, // Estimated height of each request item
+    overscan: 10, // Render 10 extra items above and below viewport for smooth scrolling
+  });
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -516,6 +729,19 @@ export default function Index() {
               <h1 className="text-lg font-semibold text-gray-900">Claude Code Monitor</h1>
             </div>
             <div className="flex items-center space-x-2">
+              {viewMode === "requests" && (
+                <button
+                  onClick={toggleCompareMode}
+                  className={`px-2.5 py-1.5 rounded transition-colors flex items-center space-x-1.5 text-xs font-medium ${
+                    compareMode
+                      ? "bg-blue-600 text-white hover:bg-blue-700"
+                      : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                  }`}
+                >
+                  <GitCompare className="w-3.5 h-3.5" />
+                  <span>{compareMode ? "Exit Compare" : "Compare"}</span>
+                </button>
+              )}
               <button
                 onClick={() => loadRequests()}
                 className="p-1.5 text-gray-600 hover:bg-gray-100 rounded transition-colors"
@@ -561,276 +787,378 @@ export default function Index() {
         </div>
       </div>
 
-      {/* Filter buttons - only show for requests view */}
-      {viewMode === "requests" && (
-        <div className="mb-6 flex justify-center">
-          <div className="inline-flex items-center bg-gray-100 rounded p-0.5 space-x-0.5">
-            <button
-              onClick={() => handleModelFilterChange("all")}
-              className={`px-3 py-1.5 rounded text-xs font-medium transition-all duration-200 ${
-                modelFilter === "all"
-                  ? "bg-white text-gray-900 shadow-sm"
-                  : "bg-transparent text-gray-600 hover:text-gray-900"
-              }`}
-            >
-              All Models
-            </button>
-            <button
-              onClick={() => handleModelFilterChange("opus")}
-              className={`px-3 py-1.5 rounded text-xs font-medium transition-all duration-200 flex items-center space-x-1 ${
-                modelFilter === "opus"
-                  ? "bg-white text-purple-600 shadow-sm"
-                  : "bg-transparent text-gray-600 hover:text-gray-900"
-              }`}
-            >
-              <Brain className="w-3 h-3" />
-              <span>Opus</span>
-            </button>
-            <button
-              onClick={() => handleModelFilterChange("sonnet")}
-              className={`px-3 py-1.5 rounded text-xs font-medium transition-all duration-200 flex items-center space-x-1 ${
-                modelFilter === "sonnet"
-                  ? "bg-white text-indigo-600 shadow-sm"
-                  : "bg-transparent text-gray-600 hover:text-gray-900"
-              }`}
-            >
-              <Sparkles className="w-3 h-3" />
-              <span>Sonnet</span>
-            </button>
-            <button
-              onClick={() => handleModelFilterChange("haiku")}
-              className={`px-3 py-1.5 rounded text-xs font-medium transition-all duration-200 flex items-center space-x-1 ${
-                modelFilter === "haiku"
-                  ? "bg-white text-teal-600 shadow-sm"
-                  : "bg-transparent text-gray-600 hover:text-gray-900"
-              }`}
-            >
-              <Zap className="w-3 h-3" />
-              <span>Haiku</span>
-            </button>
+      {/* Compare mode banner - sticky below header */}
+      {compareMode && viewMode === "requests" && (
+        <div className="sticky top-[57px] z-30 bg-gray-50 px-6 py-2 border-b border-gray-200">
+          <div className="max-w-7xl mx-auto bg-blue-50 border border-blue-200 rounded-lg p-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-3">
+                <GitCompare className="w-5 h-5 text-blue-600" />
+                <div>
+                  <span className="text-sm font-medium text-blue-900">
+                    Compare Mode
+                  </span>
+                  <span className="text-sm text-blue-700 ml-2">
+                    Select 2 requests to compare ({selectedForCompare.length}/2 selected)
+                  </span>
+                </div>
+              </div>
+              <div className="flex items-center space-x-2">
+                {selectedForCompare.length === 2 && (
+                  <button
+                    onClick={openCompareModal}
+                    className="px-3 py-1.5 text-xs font-medium bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
+                  >
+                    Compare Selected
+                  </button>
+                )}
+                <button
+                  onClick={toggleCompareMode}
+                  className="px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-100 rounded transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
 
       {/* Main Content */}
-      <main className="max-w-7xl mx-auto px-6 py-8 space-y-8">
-        {/* Stats Grid */}
-        <div className="mb-6">
-          <div className="bg-white border border-gray-200 rounded-lg p-4">
+      <main className="max-w-7xl mx-auto px-6 py-8">
+        {viewMode === "requests" && (
+          <div className="space-y-8">
+            {/* Date Navigation - Always Visible */}
             <div className="flex items-center justify-between">
-              <div>
-                <p className="text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  {viewMode === "requests" ? "Total Requests" : "Total Conversations"}
-                </p>
-                <p className="text-2xl font-semibold text-gray-900 mt-1">
-                  {viewMode === "requests" ? requests.length : conversations.length}
-                </p>
+              <h2 className="text-2xl font-semibold text-gray-900">Request History</h2>
+              <div className="flex items-center space-x-3">
+                <button
+                  onClick={() => {
+                    const newDate = new Date(selectedDate);
+                    newDate.setDate(newDate.getDate() - 1);
+                    handleDateChange(newDate);
+                  }}
+                  disabled={isNavigating}
+                  className="p-2 rounded-lg hover:bg-gray-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <ChevronLeft className="w-4 h-4 text-gray-600" />
+                </button>
+                <span className={`text-sm font-medium min-w-[80px] text-center ${
+                  selectedDate.toDateString() === new Date().toDateString()
+                    ? 'text-gray-900 font-semibold'
+                    : 'text-gray-700'
+                }`}>
+                  {selectedDate.toDateString() === new Date().toDateString()
+                    ? 'Today'
+                    : selectedDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                </span>
+                <button
+                  onClick={() => {
+                    const newDate = new Date(selectedDate);
+                    newDate.setDate(newDate.getDate() + 1);
+                    // Normalize to midnight for comparison
+                    const today = new Date();
+                    today.setHours(0, 0, 0, 0);
+                    newDate.setHours(0, 0, 0, 0);
+                    if (newDate <= today) {
+                      handleDateChange(newDate);
+                    }
+                  }}
+                  disabled={isNavigating || (() => {
+                    const today = new Date();
+                    today.setHours(0, 0, 0, 0);
+                    const selected = new Date(selectedDate);
+                    selected.setHours(0, 0, 0, 0);
+                    return selected.getTime() >= today.getTime();
+                  })()}
+                  className="p-2 rounded-lg hover:bg-gray-100 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                >
+                  <ChevronRight className="w-4 h-4 text-gray-600" />
+                </button>
               </div>
             </div>
-          </div>
-        </div>
 
-        {/* Main Content */}
-        {viewMode === "requests" ? (
-          /* Request History */
-          <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
-            <div className="bg-gray-50 px-4 py-3 border-b border-gray-200">
-              <div className="flex items-center justify-between">
-                <h2 className="text-sm font-semibold text-gray-900 uppercase tracking-wider">Request History</h2>
+            {/* Loading State - Only for initial stats load */}
+            {isLoadingStats ? (
+              <div className="bg-white border border-gray-200 rounded-lg p-12 flex items-center justify-center">
+                <div className="text-center">
+                  <Loader2 className="w-8 h-8 mx-auto animate-spin text-gray-400" />
+                  <p className="mt-3 text-sm text-gray-500">Loading...</p>
+                </div>
               </div>
-            </div>
-            <div className="divide-y divide-gray-200">
-              {(isFetching && requestsCurrentPage === 1) || isPending ? (
-                <div className="p-8 text-center">
-                  <Loader2 className="w-6 h-6 mx-auto animate-spin text-gray-400" />
-                  <p className="mt-2 text-xs text-gray-500">Loading requests...</p>
-                </div>
-              ) : filteredRequests.length === 0 ? (
-                <div className="p-8 text-center text-gray-500">
-                  <h3 className="text-sm font-medium text-gray-600 mb-1">No requests found</h3>
-                  <p className="text-xs text-gray-500">Make sure you have set <code className="font-mono bg-gray-100 px-1 py-0.5 rounded">ANTHROPIC_BASE_URL</code> to point at the proxy</p>
-                </div>
-              ) : (
-                <>
-                  {filteredRequests.map(request => (
-                    <div key={request.id} className="px-4 py-3 hover:bg-gray-50 transition-colors cursor-pointer border-b border-gray-100 last:border-b-0" onClick={() => showRequestDetails(request.id)}>
-                      <div className="flex items-start justify-between">
-                        <div className="flex-1 min-w-0 mr-4">
-                          {/* Model and Status */}
-                          <div className="flex items-center space-x-3 mb-1">
-                            <h3 className="text-sm font-medium">
-                              {request.routedModel || request.body?.model ? (
-                                // Use routedModel if available, otherwise fall back to body.model
-                                (() => {
-                                  const model = request.routedModel || request.body?.model || '';
-                                  if (model.includes('opus')) return <span className="text-purple-600 font-semibold">Opus</span>;
-                                  if (model.includes('sonnet')) return <span className="text-indigo-600 font-semibold">Sonnet</span>;
-                                  if (model.includes('haiku')) return <span className="text-teal-600 font-semibold">Haiku</span>;
-                                  if (model.includes('gpt-4o')) return <span className="text-green-600 font-semibold">GPT-4o</span>;
-                                  if (model.includes('gpt')) return <span className="text-green-600 font-semibold">GPT</span>;
-                                  return <span className="text-gray-900">{model.split('-')[0]}</span>;
-                                })()
-                              ) : <span className="text-gray-900">API</span>}
-                            </h3>
-                            {request.routedModel && request.routedModel !== request.originalModel && (
-                              <span className="text-xs px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded font-medium flex items-center space-x-1">
-                                <ArrowLeftRight className="w-3 h-3" />
-                                <span>routed</span>
-                              </span>
-                            )}
-                            {request.response?.statusCode && (
-                              <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${
-                                request.response.statusCode >= 200 && request.response.statusCode < 300 
-                                  ? 'bg-green-100 text-green-700' 
-                                  : request.response.statusCode >= 300 && request.response.statusCode < 400
-                                  ? 'bg-yellow-100 text-yellow-700'
-                                  : 'bg-red-100 text-red-700'
-                              }`}>
-                                {request.response.statusCode}
-                              </span>
-                            )}
-                            {request.conversationId && (
-                              <span className="text-xs px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded font-medium">
-                                Turn {request.turnNumber}
-                              </span>
-                            )}
-                          </div>
-                          
-                          {/* Endpoint */}
-                          <div className="text-xs text-gray-600 font-mono mb-1">
-                            {getChatCompletionsEndpoint(request.routedModel, request.endpoint)}
-                          </div>
-                          
-                          {/* Metrics Row */}
-                          <div className="flex items-center space-x-3 text-xs">
-                            {request.response?.body?.usage && (
-                              <>
-                                <span className="font-mono text-gray-600">
-                                  <span className="font-medium text-gray-900">{((request.response.body.usage.input_tokens || 0) + (request.response.body.usage.output_tokens || 0)).toLocaleString()}</span> tokens
-                                </span>
-                                {request.response.body.usage.cache_read_input_tokens && (
-                                  <span className="font-mono bg-green-50 text-green-700 px-1.5 py-0.5 rounded">
-                                    {request.response.body.usage.cache_read_input_tokens.toLocaleString()} cached
-                                  </span>
-                                )}
-                              </>
-                            )}
-                            
-                            {request.response?.responseTime && (
-                              <span className="font-mono text-gray-600">
-                                <span className="font-medium text-gray-900">{(request.response.responseTime / 1000).toFixed(2)}</span>s
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                        <div className="flex-shrink-0 text-right">
-                          <div className="text-xs text-gray-500">
-                            {new Date(request.timestamp).toLocaleDateString()}
-                          </div>
-                          <div className="text-xs text-gray-400">
-                            {new Date(request.timestamp).toLocaleTimeString()}
-                          </div>
-                        </div>
+            ) : (
+              <div className="space-y-6">
+                {/* Stats Dashboard */}
+                {stats && <UsageDashboard stats={stats} selectedDate={selectedDate} />}
+
+                {/* Request List */}
+                <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+                  <div className="bg-gray-50 px-4 py-3 border-b border-gray-200">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-sm font-semibold text-gray-900 uppercase tracking-wider">Requests</h3>
+                      <div className="inline-flex items-center bg-white rounded p-0.5 space-x-0.5 border border-gray-200">
+                        <button
+                          onClick={() => handleModelFilterChange("all")}
+                          className={`px-2.5 py-1 rounded text-xs font-medium transition-all duration-200 ${
+                            modelFilter === "all"
+                              ? "bg-gray-100 text-gray-900"
+                              : "bg-transparent text-gray-600 hover:text-gray-900"
+                          }`}
+                        >
+                          All Models
+                        </button>
+                        <button
+                          onClick={() => handleModelFilterChange("opus")}
+                          className={`px-2.5 py-1 rounded text-xs font-medium transition-all duration-200 flex items-center space-x-1 ${
+                            modelFilter === "opus"
+                              ? "bg-purple-50 text-purple-700"
+                              : "bg-transparent text-gray-600 hover:text-gray-900"
+                          }`}
+                        >
+                          <Brain className="w-3 h-3" />
+                          <span>Opus</span>
+                        </button>
+                        <button
+                          onClick={() => handleModelFilterChange("sonnet")}
+                          className={`px-2.5 py-1 rounded text-xs font-medium transition-all duration-200 flex items-center space-x-1 ${
+                            modelFilter === "sonnet"
+                              ? "bg-blue-50 text-blue-700"
+                              : "bg-transparent text-gray-600 hover:text-gray-900"
+                          }`}
+                        >
+                          <Sparkles className="w-3 h-3" />
+                          <span>Sonnet</span>
+                        </button>
+                        <button
+                          onClick={() => handleModelFilterChange("haiku")}
+                          className={`px-2.5 py-1 rounded text-xs font-medium transition-all duration-200 flex items-center space-x-1 ${
+                            modelFilter === "haiku"
+                              ? "bg-green-50 text-green-700"
+                              : "bg-transparent text-gray-600 hover:text-gray-900"
+                          }`}
+                        >
+                          <Zap className="w-3 h-3" />
+                          <span>Haiku</span>
+                        </button>
                       </div>
                     </div>
-                  ))}
-                  {hasMoreRequests && (
-                    <div className="p-3 text-center border-t border-gray-100">
-                      <button
-                        onClick={() => loadRequests(modelFilter, true)}
-                        disabled={isFetching}
-                        className="px-3 py-1.5 text-xs font-medium text-gray-700 bg-gray-100 rounded hover:bg-gray-200 disabled:opacity-50 transition-colors"
+                  </div>
+                  <div>
+                    {isFetching ? (
+                      <div className="p-8 text-center">
+                        <Loader2 className="w-6 h-6 mx-auto animate-spin text-gray-400" />
+                        <p className="mt-2 text-xs text-gray-500">Loading requests...</p>
+                      </div>
+                    ) : filteredRequests.length === 0 ? (
+                      <div className="p-8 text-center text-gray-500">
+                        <h3 className="text-sm font-medium text-gray-600 mb-1">No requests found</h3>
+                        <p className="text-xs text-gray-500">No requests for this date</p>
+                      </div>
+                    ) : (
+                      <div
+                        ref={requestsParentRef}
+                        className="overflow-auto"
+                        style={{ height: '600px' }}
                       >
-                        {isFetching ? "Loading..." : "Load More"}
-                      </button>
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
-          </div>
-        ) : (
-          /* Conversations View */
-          <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
-            <div className="bg-gray-50 px-4 py-3 border-b border-gray-200">
-              <h2 className="text-sm font-semibold text-gray-900 uppercase tracking-wider">Conversations</h2>
-            </div>
-            <div className="divide-y divide-gray-200">
-              {(isFetching && conversationsCurrentPage === 1) || isPending ? (
-                <div className="p-8 text-center">
-                  <Loader2 className="w-6 h-6 mx-auto animate-spin text-gray-400" />
-                  <p className="mt-2 text-xs text-gray-500">Loading conversations...</p>
-                </div>
-              ) : conversations.length === 0 ? (
-                <div className="p-8 text-center text-gray-500">
-                  <h3 className="text-sm font-medium text-gray-600 mb-1">No conversations found</h3>
-                  <p className="text-xs text-gray-500">Start a conversation to see it appear here</p>
-                </div>
-              ) : (
-                <>
-                  {conversations.map(conversation => (
-                    <div key={conversation.id} className="px-4 py-4 hover:bg-gray-50 transition-colors cursor-pointer border-b border-gray-100 last:border-b-0" onClick={() => loadConversationDetails(conversation.id, conversation.projectName)}>
-                      <div className="flex items-start justify-between">
-                        <div className="flex-1 min-w-0 mr-4">
-                          <div className="flex items-center space-x-2 mb-2">
-                            <span className="text-sm font-semibold text-gray-900 font-mono">
-                              #{conversation.id.slice(-8)}
-                            </span>
-                            <span className="text-xs px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full font-medium">
-                              {conversation.requestCount} turns
-                            </span>
-                            <span className="text-xs px-2 py-0.5 bg-gray-100 text-gray-700 rounded-full">
-                              {formatDuration(conversation.duration)}
-                            </span>
-                            {conversation.projectName && (
-                              <span className="text-xs px-2 py-0.5 bg-purple-100 text-purple-700 rounded-full font-medium">
-                                {conversation.projectName}
-                              </span>
-                            )}
-                          </div>
-                          <div className="space-y-2">
-                            <div className="bg-gray-50 rounded p-2 border border-gray-200">
-                              <div className="text-xs font-medium text-gray-600 mb-0.5">First Message</div>
-                              <div className="text-xs text-gray-700 line-clamp-2">
-                                {conversation.firstMessage || "No content"}
-                              </div>
-                            </div>
-                            {conversation.lastMessage && conversation.lastMessage !== conversation.firstMessage && (
-                              <div className="bg-blue-50 rounded p-2 border border-blue-200">
-                                <div className="text-xs font-medium text-blue-600 mb-0.5">Latest Message</div>
-                                <div className="text-xs text-gray-700 line-clamp-2">
-                                  {conversation.lastMessage}
+                        <div
+                          style={{
+                            height: `${requestsVirtualizer.getTotalSize()}px`,
+                            width: '100%',
+                            position: 'relative',
+                          }}
+                        >
+                          {requestsVirtualizer.getVirtualItems().map((virtualItem) => {
+                            const summary = filteredRequests[virtualItem.index];
+                            return (
+                              <div
+                                key={summary.requestId}
+                                className="px-4 py-4 hover:bg-gray-50 transition-colors cursor-pointer border-b border-gray-100 absolute top-0 left-0 w-full"
+                                style={{
+                                  transform: `translateY(${virtualItem.start}px)`,
+                                }}
+                                onClick={() => showRequestDetails(summary.requestId)}
+                              >
+                                <div className="flex items-start justify-between">
+                                  <div className="flex-1 min-w-0 mr-4">
+                                    <div className="flex items-center space-x-3 mb-1">
+                                      <span
+                                        className={`font-mono text-sm font-semibold ${
+                                          summary.model.toLowerCase().includes('opus')
+                                            ? 'text-purple-600'
+                                            : summary.model.toLowerCase().includes('sonnet')
+                                            ? 'text-blue-600'
+                                            : 'text-green-600'
+                                        }`}
+                                      >
+                                        {summary.model.toLowerCase().includes('opus')
+                                          ? 'Opus'
+                                          : summary.model.toLowerCase().includes('sonnet')
+                                          ? 'Sonnet'
+                                          : 'Haiku'}
+                                      </span>
+                                      {summary.statusCode && (
+                                        <span className="text-xs font-mono">
+                                          {summary.statusCode === 200 && '200'}
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="text-sm text-gray-600 font-mono truncate mb-2">
+                                      {summary.endpoint}
+                                    </div>
+                                    <div className="flex items-center space-x-3 text-xs">
+                                      {summary.usage && (
+                                        <>
+                                          {(summary.usage.input_tokens || summary.usage.cache_read_input_tokens) && (
+                                            <span className="font-mono text-gray-600">
+                                              <span className="font-medium text-gray-900">
+                                                {(summary.usage.input_tokens || 0).toLocaleString()}
+                                              </span>{' '}
+                                              in
+                                            </span>
+                                          )}
+                                          {summary.usage.output_tokens && (
+                                            <span className="font-mono text-gray-600">
+                                              <span className="font-medium text-gray-900">
+                                                {summary.usage.output_tokens.toLocaleString()}
+                                              </span>{' '}
+                                              out
+                                            </span>
+                                          )}
+                                          {summary.usage.cache_read_input_tokens && (
+                                            <span className="font-mono bg-green-50 text-green-700 px-1.5 py-0.5 rounded">
+                                              {Math.round(((summary.usage.cache_read_input_tokens || 0) / ((summary.usage.input_tokens || 0) + (summary.usage.cache_read_input_tokens || 0))) * 100)}% cached
+                                            </span>
+                                          )}
+                                        </>
+                                      )}
+                                      {summary.responseTime && (
+                                        <span className="font-mono text-gray-600">
+                                          <span className="font-medium text-gray-900">{(summary.responseTime / 1000).toFixed(2)}</span>s
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                  <div className="flex-shrink-0 text-right">
+                                    <div className="text-xs text-gray-500">
+                                      {new Date(summary.timestamp).toLocaleDateString()}
+                                    </div>
+                                    <div className="text-xs text-gray-400">
+                                      {new Date(summary.timestamp).toLocaleTimeString()}
+                                    </div>
+                                  </div>
                                 </div>
                               </div>
-                            )}
-                          </div>
+                            );
+                          })}
                         </div>
-                        <div className="flex-shrink-0 text-right">
-                          <div className="text-xs text-gray-500">
-                            {new Date(conversation.startTime).toLocaleDateString()}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {viewMode === "conversations" && (
+          <>
+            <div className="mb-6">
+              <div className="bg-white border border-gray-200 rounded-lg p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Total Conversations
+                    </p>
+                    <p className="text-2xl font-semibold text-gray-900 mt-1">
+                      {conversations.length}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Conversations View */}
+            <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+              <div className="bg-gray-50 px-4 py-3 border-b border-gray-200">
+                <h2 className="text-sm font-semibold text-gray-900 uppercase tracking-wider">Conversations</h2>
+              </div>
+              <div className="divide-y divide-gray-200">
+                {(isFetching && conversationsCurrentPage === 1) || isPending ? (
+                  <div className="p-8 text-center">
+                    <Loader2 className="w-6 h-6 mx-auto animate-spin text-gray-400" />
+                    <p className="mt-2 text-xs text-gray-500">Loading conversations...</p>
+                  </div>
+                ) : conversations.length === 0 ? (
+                  <div className="p-8 text-center text-gray-500">
+                    <h3 className="text-sm font-medium text-gray-600 mb-1">No conversations found</h3>
+                    <p className="text-xs text-gray-500">Start a conversation to see it appear here</p>
+                  </div>
+                ) : (
+                  <>
+                    {conversations.map(conversation => (
+                      <div key={conversation.id} className="px-4 py-4 hover:bg-gray-50 transition-colors cursor-pointer border-b border-gray-100 last:border-b-0" onClick={() => loadConversationDetails(conversation.id, conversation.projectName)}>
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1 min-w-0 mr-4">
+                            <div className="flex items-center space-x-2 mb-2">
+                              <span className="text-sm font-semibold text-gray-900 font-mono">
+                                #{conversation.id.slice(-8)}
+                              </span>
+                              <span className="text-xs px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full font-medium">
+                                {conversation.requestCount} turns
+                              </span>
+                              <span className="text-xs px-2 py-0.5 bg-gray-100 text-gray-700 rounded-full">
+                                {formatDuration(conversation.duration)}
+                              </span>
+                              {conversation.projectName && (
+                                <span className="text-xs px-2 py-0.5 bg-purple-100 text-purple-700 rounded-full font-medium">
+                                  {conversation.projectName}
+                                </span>
+                              )}
+                            </div>
+                            <div className="space-y-2">
+                              <div className="bg-gray-50 rounded p-2 border border-gray-200">
+                                <div className="text-xs font-medium text-gray-600 mb-0.5">First Message</div>
+                                <div className="text-xs text-gray-700 line-clamp-2">
+                                  {conversation.firstMessage || "No content"}
+                                </div>
+                              </div>
+                              {conversation.lastMessage && conversation.lastMessage !== conversation.firstMessage && (
+                                <div className="bg-blue-50 rounded p-2 border border-blue-200">
+                                  <div className="text-xs font-medium text-blue-600 mb-0.5">Latest Message</div>
+                                  <div className="text-xs text-gray-700 line-clamp-2">
+                                    {conversation.lastMessage}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
                           </div>
-                          <div className="text-xs text-gray-400">
-                            {new Date(conversation.startTime).toLocaleTimeString()}
+                          <div className="flex-shrink-0 text-right">
+                            <div className="text-xs text-gray-500">
+                              {new Date(conversation.startTime).toLocaleDateString()}
+                            </div>
+                            <div className="text-xs text-gray-400">
+                              {new Date(conversation.startTime).toLocaleTimeString()}
+                            </div>
                           </div>
                         </div>
                       </div>
-                    </div>
-                  ))}
-                  {hasMoreConversations && (
-                    <div className="p-3 text-center border-t border-gray-100">
-                      <button
-                        onClick={() => loadConversations(modelFilter, true)}
-                        disabled={isFetching}
-                        className="px-3 py-1.5 text-xs font-medium text-gray-700 bg-gray-100 rounded hover:bg-gray-200 disabled:opacity-50 transition-colors"
-                      >
-                        {isFetching ? "Loading..." : "Load More"}
-                      </button>
-                    </div>
-                  )}
-                </>
-              )}
+                    ))}
+                    {hasMoreConversations && (
+                      <div className="p-3 text-center border-t border-gray-100">
+                        <button
+                          onClick={() => loadConversations(modelFilter, true)}
+                          disabled={isFetching}
+                          className="px-3 py-1.5 text-xs font-medium text-gray-700 bg-gray-100 rounded hover:bg-gray-200 disabled:opacity-50 transition-colors"
+                        >
+                          {isFetching ? "Loading..." : "Load More"}
+                        </button>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
             </div>
-          </div>
+          </>
         )}
       </main>
 
@@ -853,7 +1181,7 @@ export default function Index() {
               </div>
             </div>
             <div className="p-6 overflow-y-auto max-h-[calc(90vh-100px)]">
-              <RequestDetailContent request={selectedRequest} onGrade={() => gradeRequest(selectedRequest.id)} />
+              <RequestDetailContent request={selectedRequest} />
             </div>
           </div>
         </div>
@@ -908,6 +1236,15 @@ export default function Index() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Request Compare Modal */}
+      {isCompareModalOpen && selectedForCompare.length === 2 && (
+        <RequestCompareModal
+          request1={selectedForCompare[0]}
+          request2={selectedForCompare[1]}
+          onClose={closeCompareModal}
+        />
       )}
     </div>
   );

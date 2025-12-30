@@ -40,6 +40,20 @@ type RequestLog struct {
 	Response      *ResponseLog        `json:"response,omitempty"`
 }
 
+// RequestSummary is a lightweight version of RequestLog for list views
+type RequestSummary struct {
+	RequestID     string          `json:"requestId"`
+	Timestamp     string          `json:"timestamp"`
+	Method        string          `json:"method"`
+	Endpoint      string          `json:"endpoint"`
+	Model         string          `json:"model,omitempty"`
+	OriginalModel string          `json:"originalModel,omitempty"`
+	RoutedModel   string          `json:"routedModel,omitempty"`
+	StatusCode    int             `json:"statusCode,omitempty"`
+	ResponseTime  int64           `json:"responseTime,omitempty"`
+	Usage         *AnthropicUsage `json:"usage,omitempty"`
+}
+
 type ResponseLog struct {
 	StatusCode      int                 `json:"statusCode"`
 	Headers         map[string][]string `json:"headers"`
@@ -195,4 +209,45 @@ type ContentBlock struct {
 	Name  string          `json:"name,omitempty"`
 	Input json.RawMessage `json:"input,omitempty"`
 	Text  string          `json:"text,omitempty"`
+}
+
+// Dashboard stats structures
+type DashboardStats struct {
+	DailyStats []DailyTokens `json:"dailyStats"`
+}
+
+type HourlyStatsResponse struct {
+	HourlyStats     []HourlyTokens `json:"hourlyStats"`
+	TodayTokens     int64          `json:"todayTokens"`
+	TodayRequests   int            `json:"todayRequests"`
+	AvgResponseTime int64          `json:"avgResponseTime"`
+}
+
+type ModelStatsResponse struct {
+	ModelStats []ModelTokens `json:"modelStats"`
+}
+
+type DailyTokens struct {
+	Date     string                `json:"date"`
+	Tokens   int64                 `json:"tokens"`
+	Requests int                   `json:"requests"`
+	Models   map[string]ModelStats `json:"models,omitempty"` // Per-model breakdown
+}
+
+type HourlyTokens struct {
+	Hour     int                   `json:"hour"`
+	Tokens   int64                 `json:"tokens"`
+	Requests int                   `json:"requests"`
+	Models   map[string]ModelStats `json:"models,omitempty"` // Per-model breakdown
+}
+
+type ModelStats struct {
+	Tokens   int64 `json:"tokens"`
+	Requests int   `json:"requests"`
+}
+
+type ModelTokens struct {
+	Model    string `json:"model"`
+	Tokens   int64  `json:"tokens"`
+	Requests int    `json:"requests"`
 }

@@ -237,6 +237,172 @@ func (h *Handler) GetRequests(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// GetRequestsSummary returns lightweight request data for fast list rendering
+func (h *Handler) GetRequestsSummary(w http.ResponseWriter, r *http.Request) {
+	modelFilter := r.URL.Query().Get("model")
+	if modelFilter == "" {
+		modelFilter = "all"
+	}
+
+	// Get start/end time range (UTC ISO 8601 format from browser)
+	startTime := r.URL.Query().Get("start")
+	endTime := r.URL.Query().Get("end")
+
+	// Parse pagination params
+	offset := 0
+	limit := 0 // Default to 0 (no limit - fetch all)
+
+	if offsetStr := r.URL.Query().Get("offset"); offsetStr != "" {
+		if parsed, err := strconv.Atoi(offsetStr); err == nil && parsed >= 0 {
+			offset = parsed
+		}
+	}
+
+	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
+		if parsed, err := strconv.Atoi(limitStr); err == nil && parsed > 0 && parsed <= 100000 {
+			limit = parsed
+		}
+	}
+
+	summaries, total, err := h.storageService.GetRequestsSummaryPaginated(modelFilter, startTime, endTime, offset, limit)
+	if err != nil {
+		log.Printf("Error getting request summaries: %v", err)
+		http.Error(w, "Failed to get requests", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(struct {
+		Requests []*model.RequestSummary `json:"requests"`
+		Total    int                     `json:"total"`
+		Offset   int                     `json:"offset"`
+		Limit    int                     `json:"limit"`
+	}{
+		Requests: summaries,
+		Total:    total,
+		Offset:   offset,
+		Limit:    limit,
+	})
+}
+
+// GetRequestByID returns a single request by its ID
+func (h *Handler) GetRequestByID(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	requestID := vars["id"]
+
+	if requestID == "" {
+		http.Error(w, "Request ID is required", http.StatusBadRequest)
+		return
+	}
+
+	request, fullID, err := h.storageService.GetRequestByShortID(requestID)
+	if err != nil {
+		log.Printf("Error getting request by ID %s: %v", requestID, err)
+		http.Error(w, "Failed to get request", http.StatusInternalServerError)
+		return
+	}
+
+	if request == nil {
+		http.Error(w, "Request not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(struct {
+		Request *model.RequestLog `json:"request"`
+		FullID  string            `json:"fullId"`
+	}{
+		Request: request,
+		FullID:  fullID,
+	})
+}
+
+// GetStats returns aggregated dashboard statistics - lightning fast!
+func (h *Handler) GetStats(w http.ResponseWriter, r *http.Request) {
+	// Get start/end time range (UTC ISO 8601 format from browser)
+	// Browser sends the user's local day boundaries converted to UTC
+	startTime := r.URL.Query().Get("start")
+	endTime := r.URL.Query().Get("end")
+
+	// Fallback to last 7 days if not provided
+	if startTime == "" || endTime == "" {
+		now := time.Now().UTC()
+		endTime = now.Format(time.RFC3339)
+		startTime = now.AddDate(0, 0, -7).Format(time.RFC3339)
+	}
+
+	stats, err := h.storageService.GetStats(startTime, endTime)
+	if err != nil {
+		log.Printf("Error getting stats: %v", err)
+		http.Error(w, "Failed to get stats", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(stats)
+}
+
+// GetHourlyStats returns hourly breakdown for a specific date range
+func (h *Handler) GetHourlyStats(w http.ResponseWriter, r *http.Request) {
+	// Get start/end time range (UTC ISO 8601 format from browser)
+	startTime := r.URL.Query().Get("start")
+	endTime := r.URL.Query().Get("end")
+
+	if startTime == "" || endTime == "" {
+		http.Error(w, "start and end parameters are required", http.StatusBadRequest)
+		return
+	}
+
+	stats, err := h.storageService.GetHourlyStats(startTime, endTime)
+	if err != nil {
+		log.Printf("Error getting hourly stats: %v", err)
+		http.Error(w, "Failed to get hourly stats", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(stats)
+}
+
+// GetModelStats returns model breakdown for a specific date range
+func (h *Handler) GetModelStats(w http.ResponseWriter, r *http.Request) {
+	// Get start/end time range (UTC ISO 8601 format from browser)
+	startTime := r.URL.Query().Get("start")
+	endTime := r.URL.Query().Get("end")
+
+	if startTime == "" || endTime == "" {
+		http.Error(w, "start and end parameters are required", http.StatusBadRequest)
+		return
+	}
+
+	stats, err := h.storageService.GetModelStats(startTime, endTime)
+	if err != nil {
+		log.Printf("Error getting model stats: %v", err)
+		http.Error(w, "Failed to get model stats", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(stats)
+}
+
+// GetLatestRequestDate returns the date of the most recent request
+func (h *Handler) GetLatestRequestDate(w http.ResponseWriter, r *http.Request) {
+	latestDate, err := h.storageService.GetLatestRequestDate()
+	if err != nil {
+		log.Printf("Error getting latest request date: %v", err)
+		http.Error(w, "Failed to get latest request date", http.StatusInternalServerError)
+		return
+	}
+
+	response := map[string]interface{}{
+		"latestDate": latestDate,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
 func (h *Handler) DeleteRequests(w http.ResponseWriter, r *http.Request) {
 
 	clearedCount, err := h.storageService.ClearRequests()

@@ -4,7 +4,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 
@@ -18,7 +20,10 @@ type sqliteStorageService struct {
 }
 
 func NewSQLiteStorageService(cfg *config.StorageConfig) (StorageService, error) {
-	db, err := sql.Open("sqlite3", cfg.DBPath)
+	// Add SQLite-specific connection parameters for better concurrency
+	dbPath := cfg.DBPath + "?_journal_mode=WAL&_busy_timeout=5000&_synchronous=NORMAL"
+
+	db, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
@@ -342,19 +347,15 @@ func (s *sqliteStorageService) GetAllRequests(modelFilter string) ([]*model.Requ
 			&req.RoutedModel,
 		)
 		if err != nil {
-			// Error scanning row - skip
 			continue
 		}
 
-		// Unmarshal JSON fields
 		if err := json.Unmarshal([]byte(headersJSON), &req.Headers); err != nil {
-			// Error unmarshaling headers
 			continue
 		}
 
 		var body interface{}
 		if err := json.Unmarshal([]byte(bodyJSON), &body); err != nil {
-			// Error unmarshaling body
 			continue
 		}
 		req.Body = body
@@ -377,6 +378,495 @@ func (s *sqliteStorageService) GetAllRequests(modelFilter string) ([]*model.Requ
 	}
 
 	return requests, nil
+}
+
+// GetRequestsSummary returns minimal data for list view - no body/headers, only usage from response
+func (s *sqliteStorageService) GetRequestsSummary(modelFilter string) ([]*model.RequestSummary, error) {
+	query := `
+		SELECT id, timestamp, method, endpoint, model, original_model, routed_model, response
+		FROM requests
+	`
+	args := []interface{}{}
+
+	if modelFilter != "" && modelFilter != "all" {
+		query += " WHERE LOWER(model) LIKE ?"
+		args = append(args, "%"+strings.ToLower(modelFilter)+"%")
+	}
+
+	query += " ORDER BY timestamp DESC"
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query requests: %w", err)
+	}
+	defer rows.Close()
+
+	var summaries []*model.RequestSummary
+	for rows.Next() {
+		var s model.RequestSummary
+		var responseJSON sql.NullString
+
+		err := rows.Scan(
+			&s.RequestID,
+			&s.Timestamp,
+			&s.Method,
+			&s.Endpoint,
+			&s.Model,
+			&s.OriginalModel,
+			&s.RoutedModel,
+			&responseJSON,
+		)
+		if err != nil {
+			continue
+		}
+
+		// Only parse response to extract usage and status
+		if responseJSON.Valid {
+			var resp model.ResponseLog
+			if err := json.Unmarshal([]byte(responseJSON.String), &resp); err == nil {
+				s.StatusCode = resp.StatusCode
+				s.ResponseTime = resp.ResponseTime
+
+				// Extract usage from response body
+				if resp.Body != nil {
+					var respBody struct {
+						Usage *model.AnthropicUsage `json:"usage"`
+					}
+					if err := json.Unmarshal(resp.Body, &respBody); err == nil && respBody.Usage != nil {
+						s.Usage = respBody.Usage
+					}
+				}
+			}
+		}
+
+		summaries = append(summaries, &s)
+	}
+
+	return summaries, nil
+}
+
+// GetRequestsSummaryPaginated returns minimal data for list view with pagination - super fast!
+func (s *sqliteStorageService) GetRequestsSummaryPaginated(modelFilter, startTime, endTime string, offset, limit int) ([]*model.RequestSummary, int, error) {
+	// First get total count
+	countQuery := "SELECT COUNT(*) FROM requests"
+	countArgs := []interface{}{}
+	whereClauses := []string{}
+
+	if modelFilter != "" && modelFilter != "all" {
+		whereClauses = append(whereClauses, "LOWER(model) LIKE ?")
+		countArgs = append(countArgs, "%"+strings.ToLower(modelFilter)+"%")
+	}
+
+	if startTime != "" && endTime != "" {
+		whereClauses = append(whereClauses, "datetime(timestamp) >= datetime(?) AND datetime(timestamp) <= datetime(?)")
+		countArgs = append(countArgs, startTime, endTime)
+	}
+
+	if len(whereClauses) > 0 {
+		countQuery += " WHERE " + strings.Join(whereClauses, " AND ")
+	}
+
+	var total int
+	if err := s.db.QueryRow(countQuery, countArgs...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("failed to get total count: %w", err)
+	}
+
+	// Then get the requested page
+	query := `
+		SELECT id, timestamp, method, endpoint, model, original_model, routed_model, response
+		FROM requests
+	`
+	args := []interface{}{}
+	queryWhereClauses := []string{}
+
+	if modelFilter != "" && modelFilter != "all" {
+		queryWhereClauses = append(queryWhereClauses, "LOWER(model) LIKE ?")
+		args = append(args, "%"+strings.ToLower(modelFilter)+"%")
+	}
+
+	if startTime != "" && endTime != "" {
+		queryWhereClauses = append(queryWhereClauses, "datetime(timestamp) >= datetime(?) AND datetime(timestamp) <= datetime(?)")
+		args = append(args, startTime, endTime)
+	}
+
+	if len(queryWhereClauses) > 0 {
+		query += " WHERE " + strings.Join(queryWhereClauses, " AND ")
+	}
+
+	query += " ORDER BY timestamp DESC"
+
+	// Only add LIMIT if specified (0 means no limit)
+	if limit > 0 {
+		query += " LIMIT ? OFFSET ?"
+		args = append(args, limit, offset)
+	} else if offset > 0 {
+		query += " OFFSET ?"
+		args = append(args, offset)
+	}
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to query requests: %w", err)
+	}
+	defer rows.Close()
+
+	var summaries []*model.RequestSummary
+	for rows.Next() {
+		var s model.RequestSummary
+		var responseJSON sql.NullString
+
+		err := rows.Scan(
+			&s.RequestID,
+			&s.Timestamp,
+			&s.Method,
+			&s.Endpoint,
+			&s.Model,
+			&s.OriginalModel,
+			&s.RoutedModel,
+			&responseJSON,
+		)
+		if err != nil {
+			continue
+		}
+
+		// Only parse response to extract usage and status
+		if responseJSON.Valid {
+			var resp model.ResponseLog
+			if err := json.Unmarshal([]byte(responseJSON.String), &resp); err == nil {
+				s.StatusCode = resp.StatusCode
+				s.ResponseTime = resp.ResponseTime
+
+				// Extract usage from response body
+				if resp.Body != nil {
+					var respBody struct {
+						Usage *model.AnthropicUsage `json:"usage"`
+					}
+					if err := json.Unmarshal(resp.Body, &respBody); err == nil && respBody.Usage != nil {
+						s.Usage = respBody.Usage
+					}
+				}
+			}
+		}
+
+		summaries = append(summaries, &s)
+	}
+
+	log.Printf("📊 GetRequestsSummaryPaginated: returned %d requests (total: %d, limit: %d, offset: %d)", len(summaries), total, limit, offset)
+	return summaries, total, nil
+}
+
+// GetStats returns aggregated statistics for the dashboard - lightning fast!
+func (s *sqliteStorageService) GetStats(startDate, endDate string) (*model.DashboardStats, error) {
+	stats := &model.DashboardStats{
+		DailyStats: make([]model.DailyTokens, 0),
+	}
+
+	// Query each request individually to process all responses
+	query := `
+		SELECT timestamp, COALESCE(model, 'unknown') as model, response
+		FROM requests
+		WHERE datetime(timestamp) >= datetime(?) AND datetime(timestamp) <= datetime(?)
+		ORDER BY timestamp
+	`
+
+	rows, err := s.db.Query(query, startDate, endDate)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query stats: %w", err)
+	}
+	defer rows.Close()
+
+	// Aggregate data in memory
+	dailyMap := make(map[string]*model.DailyTokens)
+
+	for rows.Next() {
+		var timestamp, modelName, responseJSON string
+
+		if err := rows.Scan(&timestamp, &modelName, &responseJSON); err != nil {
+			continue
+		}
+
+		// Extract date from timestamp (format: 2025-11-28T13:03:29-08:00)
+		date := strings.Split(timestamp, "T")[0]
+
+		// Parse response to get usage
+		var resp model.ResponseLog
+		if err := json.Unmarshal([]byte(responseJSON), &resp); err != nil {
+			continue
+		}
+
+		var usage *model.AnthropicUsage
+		if resp.Body != nil {
+			var respBody struct {
+				Usage *model.AnthropicUsage `json:"usage"`
+			}
+			if err := json.Unmarshal(resp.Body, &respBody); err == nil {
+				usage = respBody.Usage
+			}
+		}
+
+		tokens := int64(0)
+		if usage != nil {
+			tokens = int64(
+				usage.InputTokens +
+					usage.OutputTokens +
+					usage.CacheReadInputTokens +
+					usage.CacheCreationInputTokens)
+		}
+
+		// Daily aggregation
+		if daily, ok := dailyMap[date]; ok {
+			daily.Tokens += tokens
+			daily.Requests++
+			// Update per-model stats
+			if daily.Models == nil {
+				daily.Models = make(map[string]model.ModelStats)
+			}
+			if modelStat, ok := daily.Models[modelName]; ok {
+				modelStat.Tokens += tokens
+				modelStat.Requests++
+				daily.Models[modelName] = modelStat
+			} else {
+				daily.Models[modelName] = model.ModelStats{
+					Tokens:   tokens,
+					Requests: 1,
+				}
+			}
+		} else {
+			dailyMap[date] = &model.DailyTokens{
+				Date:     date,
+				Tokens:   tokens,
+				Requests: 1,
+				Models: map[string]model.ModelStats{
+					modelName: {
+						Tokens:   tokens,
+						Requests: 1,
+					},
+				},
+			}
+		}
+
+	}
+
+	// Convert maps to slices
+	for _, v := range dailyMap {
+		stats.DailyStats = append(stats.DailyStats, *v)
+	}
+
+	return stats, nil
+}
+
+// GetHourlyStats returns hourly breakdown for a specific time range
+func (s *sqliteStorageService) GetHourlyStats(startTime, endTime string) (*model.HourlyStatsResponse, error) {
+	query := `
+		SELECT timestamp, COALESCE(model, 'unknown') as model, response
+		FROM requests
+		WHERE datetime(timestamp) >= datetime(?) AND datetime(timestamp) <= datetime(?)
+		ORDER BY timestamp
+	`
+
+	rows, err := s.db.Query(query, startTime, endTime)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query hourly stats: %w", err)
+	}
+	defer rows.Close()
+
+	hourlyMap := make(map[int]*model.HourlyTokens)
+	var totalTokens int64
+	var totalRequests int
+	var totalResponseTime int64
+	var responseCount int
+
+	for rows.Next() {
+		var timestamp, modelName, responseJSON string
+
+		if err := rows.Scan(&timestamp, &modelName, &responseJSON); err != nil {
+			continue
+		}
+
+		// Extract hour from timestamp
+		hour := 0
+		if t, err := time.Parse(time.RFC3339, timestamp); err == nil {
+			hour = t.Hour()
+		}
+
+		// Parse response to get usage and response time
+		var resp model.ResponseLog
+		if err := json.Unmarshal([]byte(responseJSON), &resp); err != nil {
+			continue
+		}
+
+		var usage *model.AnthropicUsage
+		if resp.Body != nil {
+			var respBody struct {
+				Usage *model.AnthropicUsage `json:"usage"`
+			}
+			if err := json.Unmarshal(resp.Body, &respBody); err == nil {
+				usage = respBody.Usage
+			}
+		}
+
+		tokens := int64(0)
+		if usage != nil {
+			tokens = int64(
+				usage.InputTokens +
+					usage.OutputTokens +
+					usage.CacheReadInputTokens +
+					usage.CacheCreationInputTokens)
+		}
+
+		totalTokens += tokens
+		totalRequests++
+
+		// Track response time
+		if resp.ResponseTime > 0 {
+			totalResponseTime += resp.ResponseTime
+			responseCount++
+		}
+
+		// Hourly aggregation
+		if hourly, ok := hourlyMap[hour]; ok {
+			hourly.Tokens += tokens
+			hourly.Requests++
+			// Update per-model stats
+			if hourly.Models == nil {
+				hourly.Models = make(map[string]model.ModelStats)
+			}
+			if modelStat, ok := hourly.Models[modelName]; ok {
+				modelStat.Tokens += tokens
+				modelStat.Requests++
+				hourly.Models[modelName] = modelStat
+			} else {
+				hourly.Models[modelName] = model.ModelStats{
+					Tokens:   tokens,
+					Requests: 1,
+				}
+			}
+		} else {
+			hourlyMap[hour] = &model.HourlyTokens{
+				Hour:     hour,
+				Tokens:   tokens,
+				Requests: 1,
+				Models: map[string]model.ModelStats{
+					modelName: {
+						Tokens:   tokens,
+						Requests: 1,
+					},
+				},
+			}
+		}
+
+	}
+
+	// Convert map to slice
+	hourlyStats := make([]model.HourlyTokens, 0)
+	for _, v := range hourlyMap {
+		hourlyStats = append(hourlyStats, *v)
+	}
+
+	// Calculate average response time
+	avgResponseTime := int64(0)
+	if responseCount > 0 {
+		avgResponseTime = totalResponseTime / int64(responseCount)
+	}
+
+	return &model.HourlyStatsResponse{
+		HourlyStats:     hourlyStats,
+		TodayTokens:     totalTokens,
+		TodayRequests:   totalRequests,
+		AvgResponseTime: avgResponseTime,
+	}, nil
+}
+
+// GetModelStats returns model breakdown for a specific time range
+func (s *sqliteStorageService) GetModelStats(startTime, endTime string) (*model.ModelStatsResponse, error) {
+	query := `
+		SELECT timestamp, COALESCE(model, 'unknown') as model, response
+		FROM requests
+		WHERE datetime(timestamp) >= datetime(?) AND datetime(timestamp) <= datetime(?)
+		ORDER BY timestamp
+	`
+
+	rows, err := s.db.Query(query, startTime, endTime)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query model stats: %w", err)
+	}
+	defer rows.Close()
+
+	modelMap := make(map[string]*model.ModelTokens)
+
+	for rows.Next() {
+		var timestamp, modelName, responseJSON string
+
+		if err := rows.Scan(&timestamp, &modelName, &responseJSON); err != nil {
+			continue
+		}
+
+		// Parse response to get usage
+		var resp model.ResponseLog
+		if err := json.Unmarshal([]byte(responseJSON), &resp); err != nil {
+			continue
+		}
+
+		var usage *model.AnthropicUsage
+		if resp.Body != nil {
+			var respBody struct {
+				Usage *model.AnthropicUsage `json:"usage"`
+			}
+			if err := json.Unmarshal(resp.Body, &respBody); err == nil {
+				usage = respBody.Usage
+			}
+		}
+
+		tokens := int64(0)
+		if usage != nil {
+			tokens = int64(
+				usage.InputTokens +
+					usage.OutputTokens +
+					usage.CacheReadInputTokens +
+					usage.CacheCreationInputTokens)
+		}
+
+		// Model aggregation
+		if modelStat, ok := modelMap[modelName]; ok {
+			modelStat.Tokens += tokens
+			modelStat.Requests++
+		} else {
+			modelMap[modelName] = &model.ModelTokens{
+				Model:    modelName,
+				Tokens:   tokens,
+				Requests: 1,
+			}
+		}
+	}
+
+	// Convert map to slice
+	modelStats := make([]model.ModelTokens, 0)
+	for _, v := range modelMap {
+		modelStats = append(modelStats, *v)
+	}
+
+	return &model.ModelStatsResponse{
+		ModelStats: modelStats,
+	}, nil
+}
+
+// GetLatestRequestDate returns the timestamp of the most recent request
+func (s *sqliteStorageService) GetLatestRequestDate() (*time.Time, error) {
+	var timestamp string
+	err := s.db.QueryRow("SELECT timestamp FROM requests ORDER BY timestamp DESC LIMIT 1").Scan(&timestamp)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to query latest request: %w", err)
+	}
+
+	t, err := time.Parse(time.RFC3339, timestamp)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse timestamp: %w", err)
+	}
+
+	return &t, nil
 }
 
 func (s *sqliteStorageService) Close() error {
