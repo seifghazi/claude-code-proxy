@@ -1,9 +1,9 @@
 import type { MetaFunction } from "@remix-run/node";
 import { useState, useEffect, useTransition } from "react";
-import { 
-  Activity, 
-  RefreshCw, 
-  Trash2, 
+import {
+  Activity,
+  RefreshCw,
+  Trash2,
   List,
   FileText,
   X,
@@ -29,11 +29,15 @@ import {
   Check,
   Lightbulb,
   Loader2,
-  ArrowLeftRight
+  ArrowLeftRight,
+  GitCompare,
+  Square,
+  CheckSquare
 } from "lucide-react";
 
 import RequestDetailContent from "../components/RequestDetailContent";
 import { ConversationThread } from "../components/ConversationThread";
+import { RequestCompareModal } from "../components/RequestCompareModal";
 import { getChatCompletionsEndpoint } from "../utils/models";
 
 export const meta: MetaFunction = () => {
@@ -155,6 +159,11 @@ export default function Index() {
   const [conversationsCurrentPage, setConversationsCurrentPage] = useState(1);
   const [hasMoreConversations, setHasMoreConversations] = useState(true);
   const itemsPerPage = 50;
+
+  // Compare mode state
+  const [compareMode, setCompareMode] = useState(false);
+  const [selectedForCompare, setSelectedForCompare] = useState<Request[]>([]);
+  const [isCompareModalOpen, setIsCompareModalOpen] = useState(false);
 
   const loadRequests = async (filter?: string, loadMore = false) => {
     setIsFetching(true);
@@ -355,6 +364,38 @@ export default function Index() {
     setSelectedRequest(null);
   };
 
+  // Compare mode functions
+  const toggleCompareMode = () => {
+    setCompareMode(!compareMode);
+    setSelectedForCompare([]);
+  };
+
+  const toggleRequestSelection = (request: Request) => {
+    setSelectedForCompare(prev => {
+      const isSelected = prev.some(r => r.id === request.id);
+      if (isSelected) {
+        return prev.filter(r => r.id !== request.id);
+      } else if (prev.length < 2) {
+        return [...prev, request];
+      }
+      return prev;
+    });
+  };
+
+  const isRequestSelected = (request: Request) => {
+    return selectedForCompare.some(r => r.id === request.id);
+  };
+
+  const openCompareModal = () => {
+    if (selectedForCompare.length === 2) {
+      setIsCompareModalOpen(true);
+    }
+  };
+
+  const closeCompareModal = () => {
+    setIsCompareModalOpen(false);
+  };
+
   const getToolStats = () => {
     let toolDefinitions = 0;
     let toolCalls = 0;
@@ -488,21 +529,25 @@ export default function Index() {
   useEffect(() => {
     const handleEscapeKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        if (isModalOpen) {
+        if (isCompareModalOpen) {
+          closeCompareModal();
+        } else if (isModalOpen) {
           closeModal();
         } else if (isConversationModalOpen) {
           setIsConversationModalOpen(false);
           setSelectedConversation(null);
+        } else if (compareMode) {
+          toggleCompareMode();
         }
       }
     };
 
     window.addEventListener('keydown', handleEscapeKey);
-    
+
     return () => {
       window.removeEventListener('keydown', handleEscapeKey);
     };
-  }, [isModalOpen, isConversationModalOpen]);
+  }, [isModalOpen, isConversationModalOpen, isCompareModalOpen, compareMode]);
 
   const filteredRequests = filterRequests(filter);
 
@@ -516,6 +561,19 @@ export default function Index() {
               <h1 className="text-lg font-semibold text-gray-900">Claude Code Monitor</h1>
             </div>
             <div className="flex items-center space-x-2">
+              {viewMode === "requests" && (
+                <button
+                  onClick={toggleCompareMode}
+                  className={`px-2.5 py-1.5 rounded transition-colors flex items-center space-x-1.5 text-xs font-medium ${
+                    compareMode
+                      ? "bg-blue-600 text-white hover:bg-blue-700"
+                      : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                  }`}
+                >
+                  <GitCompare className="w-3.5 h-3.5" />
+                  <span>{compareMode ? "Exit Compare" : "Compare"}</span>
+                </button>
+              )}
               <button
                 onClick={() => loadRequests()}
                 className="p-1.5 text-gray-600 hover:bg-gray-100 rounded transition-colors"
@@ -560,6 +618,43 @@ export default function Index() {
           </button>
         </div>
       </div>
+
+      {/* Compare mode banner - sticky below header */}
+      {compareMode && viewMode === "requests" && (
+        <div className="sticky top-[57px] z-30 bg-gray-50 px-6 py-2 border-b border-gray-200">
+          <div className="max-w-7xl mx-auto bg-blue-50 border border-blue-200 rounded-lg p-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-3">
+                <GitCompare className="w-5 h-5 text-blue-600" />
+                <div>
+                  <span className="text-sm font-medium text-blue-900">
+                    Compare Mode
+                  </span>
+                  <span className="text-sm text-blue-700 ml-2">
+                    Select 2 requests to compare ({selectedForCompare.length}/2 selected)
+                  </span>
+                </div>
+              </div>
+              <div className="flex items-center space-x-2">
+                {selectedForCompare.length === 2 && (
+                  <button
+                    onClick={openCompareModal}
+                    className="px-3 py-1.5 text-xs font-medium bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
+                  >
+                    Compare Selected
+                  </button>
+                )}
+                <button
+                  onClick={toggleCompareMode}
+                  className="px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-100 rounded transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Filter buttons - only show for requests view */}
       {viewMode === "requests" && (
@@ -653,8 +748,38 @@ export default function Index() {
               ) : (
                 <>
                   {filteredRequests.map(request => (
-                    <div key={request.id} className="px-4 py-3 hover:bg-gray-50 transition-colors cursor-pointer border-b border-gray-100 last:border-b-0" onClick={() => showRequestDetails(request.id)}>
+                    <div
+                      key={request.id}
+                      className={`px-4 py-3 hover:bg-gray-50 transition-colors cursor-pointer border-b border-gray-100 last:border-b-0 ${
+                        compareMode && isRequestSelected(request) ? 'bg-blue-50 border-l-4 border-l-blue-500' : ''
+                      }`}
+                      onClick={() => {
+                        if (compareMode) {
+                          toggleRequestSelection(request);
+                        } else {
+                          showRequestDetails(request.id);
+                        }
+                      }}
+                    >
                       <div className="flex items-start justify-between">
+                        {/* Compare mode checkbox */}
+                        {compareMode && (
+                          <div className="flex-shrink-0 mr-3 mt-0.5">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleRequestSelection(request);
+                              }}
+                              className="p-0.5"
+                            >
+                              {isRequestSelected(request) ? (
+                                <CheckSquare className="w-5 h-5 text-blue-600" />
+                              ) : (
+                                <Square className="w-5 h-5 text-gray-400 hover:text-gray-600" />
+                              )}
+                            </button>
+                          </div>
+                        )}
                         <div className="flex-1 min-w-0 mr-4">
                           {/* Model and Status */}
                           <div className="flex items-center space-x-3 mb-1">
@@ -680,8 +805,8 @@ export default function Index() {
                             )}
                             {request.response?.statusCode && (
                               <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${
-                                request.response.statusCode >= 200 && request.response.statusCode < 300 
-                                  ? 'bg-green-100 text-green-700' 
+                                request.response.statusCode >= 200 && request.response.statusCode < 300
+                                  ? 'bg-green-100 text-green-700'
                                   : request.response.statusCode >= 300 && request.response.statusCode < 400
                                   ? 'bg-yellow-100 text-yellow-700'
                                   : 'bg-red-100 text-red-700'
@@ -694,28 +819,38 @@ export default function Index() {
                                 Turn {request.turnNumber}
                               </span>
                             )}
+                            {/* Selection order indicator in compare mode */}
+                            {compareMode && isRequestSelected(request) && (
+                              <span className="text-xs px-1.5 py-0.5 bg-blue-600 text-white rounded font-medium">
+                                #{selectedForCompare.findIndex(r => r.id === request.id) + 1}
+                              </span>
+                            )}
                           </div>
-                          
+
                           {/* Endpoint */}
                           <div className="text-xs text-gray-600 font-mono mb-1">
                             {getChatCompletionsEndpoint(request.routedModel, request.endpoint)}
                           </div>
-                          
+
                           {/* Metrics Row */}
                           <div className="flex items-center space-x-3 text-xs">
                             {request.response?.body?.usage && (
                               <>
                                 <span className="font-mono text-gray-600">
-                                  <span className="font-medium text-gray-900">{((request.response.body.usage.input_tokens || 0) + (request.response.body.usage.output_tokens || 0)).toLocaleString()}</span> tokens
+                                  <span className="font-medium text-gray-900">{((request.response.body.usage.input_tokens || 0) + (request.response.body.usage.cache_read_input_tokens || 0)).toLocaleString()}</span> in
                                 </span>
-                                {request.response.body.usage.cache_read_input_tokens && (
+                                <span className="font-mono text-gray-600">
+                                  <span className="font-medium text-gray-900">{(request.response.body.usage.output_tokens || 0).toLocaleString()}</span> out
+                                </span>
+                                {request.response.body.usage.cache_read_input_tokens &&
+                                  ((request.response.body.usage.input_tokens || 0) + (request.response.body.usage.cache_read_input_tokens || 0)) > 0 && (
                                   <span className="font-mono bg-green-50 text-green-700 px-1.5 py-0.5 rounded">
-                                    {request.response.body.usage.cache_read_input_tokens.toLocaleString()} cached
+                                    {Math.round((request.response.body.usage.cache_read_input_tokens / ((request.response.body.usage.input_tokens || 0) + (request.response.body.usage.cache_read_input_tokens || 0))) * 100)}% cached
                                   </span>
                                 )}
                               </>
                             )}
-                            
+
                             {request.response?.responseTime && (
                               <span className="font-mono text-gray-600">
                                 <span className="font-medium text-gray-900">{(request.response.responseTime / 1000).toFixed(2)}</span>s
@@ -908,6 +1043,15 @@ export default function Index() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Request Compare Modal */}
+      {isCompareModalOpen && selectedForCompare.length === 2 && (
+        <RequestCompareModal
+          request1={selectedForCompare[0]}
+          request2={selectedForCompare[1]}
+          onClose={closeCompareModal}
+        />
       )}
     </div>
   );
