@@ -130,29 +130,12 @@ func (h *Handler) Messages(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Models(w http.ResponseWriter, r *http.Request) {
-
+	// This proxy uses pattern-based routing and supports any model dynamically.
+	// Returning an empty list since the actual supported models depend on the
+	// upstream providers (Anthropic, OpenAI) and their current offerings.
 	response := &model.ModelsResponse{
 		Object: "list",
-		Data: []model.ModelInfo{
-			{
-				ID:      "claude-3-sonnet-20240229",
-				Object:  "model",
-				Created: 1677610602,
-				OwnedBy: "anthropic",
-			},
-			{
-				ID:      "claude-3-opus-20240229",
-				Object:  "model",
-				Created: 1677610602,
-				OwnedBy: "anthropic",
-			},
-			{
-				ID:      "claude-3-haiku-20240307",
-				Object:  "model",
-				Created: 1677610602,
-				OwnedBy: "anthropic",
-			},
-		},
+		Data:   []model.ModelInfo{},
 	}
 
 	writeJSONResponse(w, response)
