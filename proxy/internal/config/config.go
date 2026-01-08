@@ -34,8 +34,10 @@ type TimeoutsConfig struct {
 }
 
 type ProvidersConfig struct {
-	Anthropic AnthropicProviderConfig `yaml:"anthropic"`
-	OpenAI    OpenAIProviderConfig    `yaml:"openai"`
+	Anthropic   AnthropicProviderConfig   `yaml:"anthropic"`
+	OpenAI      OpenAIProviderConfig      `yaml:"openai"`
+	Gemini      GeminiProviderConfig      `yaml:"gemini"`
+	OpenRouter  OpenRouterProviderConfig  `yaml:"openrouter"`
 }
 
 type AnthropicProviderConfig struct {
@@ -45,6 +47,16 @@ type AnthropicProviderConfig struct {
 }
 
 type OpenAIProviderConfig struct {
+	BaseURL string `yaml:"base_url"`
+	APIKey  string `yaml:"api_key"`
+}
+
+type GeminiProviderConfig struct {
+	BaseURL string `yaml:"base_url"`
+	APIKey  string `yaml:"api_key"`
+}
+
+type OpenRouterProviderConfig struct {
 	BaseURL string `yaml:"base_url"`
 	APIKey  string `yaml:"api_key"`
 }
@@ -93,6 +105,14 @@ func Load() (*Config, error) {
 			},
 			OpenAI: OpenAIProviderConfig{
 				BaseURL: "https://api.openai.com",
+				APIKey:  "",
+			},
+			Gemini: GeminiProviderConfig{
+				BaseURL: "https://generativelanguage.googleapis.com",
+				APIKey:  "",
+			},
+			OpenRouter: OpenRouterProviderConfig{
+				BaseURL: "https://openrouter.ai/api",
 				APIKey:  "",
 			},
 		},
@@ -153,6 +173,22 @@ func Load() (*Config, error) {
 	}
 	if envKey := os.Getenv("OPENAI_API_KEY"); envKey != "" {
 		cfg.Providers.OpenAI.APIKey = envKey
+	}
+	
+	// Override Gemini settings
+	if envURL := os.Getenv("GEMINI_BASE_URL"); envURL != "" {
+		cfg.Providers.Gemini.BaseURL = envURL
+	}
+	if envKey := os.Getenv("GEMINI_API_KEY"); envKey != "" {
+		cfg.Providers.Gemini.APIKey = envKey
+	}
+	
+	// Override OpenRouter settings
+	if envURL := os.Getenv("OPENROUTER_BASE_URL"); envURL != "" {
+		cfg.Providers.OpenRouter.BaseURL = envURL
+	}
+	if envKey := os.Getenv("OPENROUTER_API_KEY"); envKey != "" {
+		cfg.Providers.OpenRouter.APIKey = envKey
 	}
 
 	// Override storage settings
