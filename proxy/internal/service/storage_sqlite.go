@@ -51,6 +51,8 @@ func (s *sqliteStorageService) createTables() error {
 		model TEXT,
 		original_model TEXT,
 		routed_model TEXT,
+		api_url TEXT,
+		provider TEXT,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
 
@@ -60,7 +62,24 @@ func (s *sqliteStorageService) createTables() error {
 	`
 
 	_, err := s.db.Exec(schema)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Add new columns if they don't exist (for backward compatibility)
+	migrations := []string{
+		"ALTER TABLE requests ADD COLUMN api_url TEXT",
+		"ALTER TABLE requests ADD COLUMN provider TEXT",
+	}
+
+	for _, migration := range migrations {
+		_, err := s.db.Exec(migration)
+		if err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (s *sqliteStorageService) SaveRequest(request *model.RequestLog) (string, error) {
@@ -74,9 +93,10 @@ func (s *sqliteStorageService) SaveRequest(request *model.RequestLog) (string, e
 		return "", fmt.Errorf("failed to marshal body: %w", err)
 	}
 
+	
 	query := `
-		INSERT INTO requests (id, timestamp, method, endpoint, headers, body, user_agent, content_type, model, original_model, routed_model)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO requests (id, timestamp, method, endpoint, headers, body, user_agent, content_type, model, original_model, routed_model, api_url, provider)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
 	_, err = s.db.Exec(query,
@@ -91,6 +111,8 @@ func (s *sqliteStorageService) SaveRequest(request *model.RequestLog) (string, e
 		request.Model,
 		request.OriginalModel,
 		request.RoutedModel,
+		request.APIURL,
+		request.Provider,
 	)
 
 	if err != nil {
@@ -111,7 +133,7 @@ func (s *sqliteStorageService) GetRequests(page, limit int) ([]model.RequestLog,
 	// Get paginated results
 	offset := (page - 1) * limit
 	query := `
-		SELECT id, timestamp, method, endpoint, headers, body, model, user_agent, content_type, prompt_grade, response, original_model, routed_model
+		SELECT id, timestamp, method, endpoint, headers, body, model, user_agent, content_type, prompt_grade, response, original_model, routed_model, api_url, provider
 		FROM requests
 		ORDER BY timestamp DESC
 		LIMIT ? OFFSET ?
@@ -128,6 +150,7 @@ func (s *sqliteStorageService) GetRequests(page, limit int) ([]model.RequestLog,
 		var req model.RequestLog
 		var headersJSON, bodyJSON string
 		var promptGradeJSON, responseJSON sql.NullString
+		var apiURL, provider sql.NullString
 
 		err := rows.Scan(
 			&req.RequestID,
@@ -143,6 +166,8 @@ func (s *sqliteStorageService) GetRequests(page, limit int) ([]model.RequestLog,
 			&responseJSON,
 			&req.OriginalModel,
 			&req.RoutedModel,
+			&apiURL,
+			&provider,
 		)
 		if err != nil {
 			// Error scanning row - skip
@@ -176,6 +201,15 @@ func (s *sqliteStorageService) GetRequests(page, limit int) ([]model.RequestLog,
 			}
 		}
 
+		// Set new fields
+		if apiURL.Valid {
+			req.APIURL = apiURL.String
+		}
+		if provider.Valid {
+			req.Provider = provider.String
+		}
+
+		
 		requests = append(requests, req)
 	}
 
@@ -301,7 +335,7 @@ func (s *sqliteStorageService) GetConfig() *config.StorageConfig {
 
 func (s *sqliteStorageService) GetAllRequests(modelFilter string) ([]*model.RequestLog, error) {
 	query := `
-		SELECT id, timestamp, method, endpoint, headers, body, model, user_agent, content_type, prompt_grade, response, original_model, routed_model
+		SELECT id, timestamp, method, endpoint, headers, body, model, user_agent, content_type, prompt_grade, response, original_model, routed_model, api_url, provider
 		FROM requests
 	`
 	args := []interface{}{}
@@ -325,6 +359,7 @@ func (s *sqliteStorageService) GetAllRequests(modelFilter string) ([]*model.Requ
 		var req model.RequestLog
 		var headersJSON, bodyJSON string
 		var promptGradeJSON, responseJSON sql.NullString
+		var apiURL, provider sql.NullString
 
 		err := rows.Scan(
 			&req.RequestID,
@@ -340,6 +375,8 @@ func (s *sqliteStorageService) GetAllRequests(modelFilter string) ([]*model.Requ
 			&responseJSON,
 			&req.OriginalModel,
 			&req.RoutedModel,
+			&apiURL,
+			&provider,
 		)
 		if err != nil {
 			// Error scanning row - skip
@@ -371,6 +408,14 @@ func (s *sqliteStorageService) GetAllRequests(modelFilter string) ([]*model.Requ
 			if err := json.Unmarshal([]byte(responseJSON.String), &resp); err == nil {
 				req.Response = &resp
 			}
+		}
+
+		// Set new fields
+		if apiURL.Valid {
+			req.APIURL = apiURL.String
+		}
+		if provider.Valid {
+			req.Provider = provider.String
 		}
 
 		requests = append(requests, &req)
