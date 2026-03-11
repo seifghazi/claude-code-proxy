@@ -19,6 +19,10 @@ bin/
 dist/
 *.exe
 
+# Embedded frontend assets (populated by build)
+proxy/frontend/dist/*
+!proxy/frontend/dist/.gitkeep
+
 # IDE and system files
 .DS_Store
 .vscode/

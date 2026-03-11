@@ -1,4 +1,4 @@
-.PHONY: all build run clean install dev 
+.PHONY: all build run clean install dev
 
 # Default target
 all: install build
@@ -10,16 +10,21 @@ install:
 	@echo "📦 Installing Node dependencies..."
 	cd web && npm install
 
-# Build both services
-build: build-proxy build-web
+# Build single binary (frontend → copy → Go)
+build: build-web copy-frontend build-proxy
 
 build-proxy:
 	@echo "🔨 Building proxy server..."
-	cd proxy && go build -o ../bin/proxy cmd/proxy/main.go
+	cd proxy && CGO_ENABLED=1 go build -o ../bin/proxy cmd/proxy/main.go
 
 build-web:
 	@echo "🔨 Building web interface..."
 	cd web && npm run build
+
+copy-frontend:
+	@echo "📋 Copying frontend assets into Go embed directory..."
+	rm -rf proxy/frontend/dist
+	cp -r web/build/client proxy/frontend/dist
 
 # Run in development mode
 dev:
@@ -40,6 +45,9 @@ clean:
 	rm -rf bin/
 	rm -rf web/build/
 	rm -rf web/.cache/
+	rm -rf proxy/frontend/dist
+	mkdir -p proxy/frontend/dist
+	touch proxy/frontend/dist/.gitkeep
 	rm -f requests.db
 	rm -rf requests/
 
@@ -53,7 +61,7 @@ db-reset:
 help:
 	@echo "Claude Code Monitor - Available targets:"
 	@echo "  make install    - Install all dependencies"
-	@echo "  make build      - Build both services"
+	@echo "  make build      - Build single binary (frontend + Go)"
 	@echo "  make dev        - Run in development mode"
 	@echo "  make run-proxy  - Run proxy server only"
 	@echo "  make run-web    - Run web interface only"

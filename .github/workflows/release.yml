@@ -1,0 +1,48 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install frontend dependencies
+        run: cd web && npm ci
+
+      - name: Build frontend
+        run: cd web && npm run build
+
+      - name: Copy frontend assets to proxy embed directory
+        run: |
+          rm -rf proxy/frontend/dist
+          cp -r web/build/client proxy/frontend/dist
+
+      - name: Run GoReleaser with goreleaser-cross
+        run: |
+          docker run \
+            --rm \
+            -e CGO_ENABLED=1 \
+            -e GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }} \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v ${{ github.workspace }}:/go/src/github.com/${{ github.repository }} \
+            -w /go/src/github.com/${{ github.repository }} \
+            ghcr.io/goreleaser/goreleaser-cross:v1.23.6 \
+            release --clean

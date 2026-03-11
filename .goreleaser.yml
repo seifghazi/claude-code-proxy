@@ -1,0 +1,73 @@
+version: 2
+
+project_name: claude-code-proxy
+
+builds:
+  - id: linux-amd64
+    dir: proxy
+    main: ./cmd/proxy
+    binary: claude-code-proxy
+    goos:
+      - linux
+    goarch:
+      - amd64
+    env:
+      - CGO_ENABLED=1
+      - CC=x86_64-linux-gnu-gcc
+      - CXX=x86_64-linux-gnu-g++
+
+  - id: linux-arm64
+    dir: proxy
+    main: ./cmd/proxy
+    binary: claude-code-proxy
+    goos:
+      - linux
+    goarch:
+      - arm64
+    env:
+      - CGO_ENABLED=1
+      - CC=aarch64-linux-gnu-gcc
+      - CXX=aarch64-linux-gnu-g++
+
+  - id: darwin-amd64
+    dir: proxy
+    main: ./cmd/proxy
+    binary: claude-code-proxy
+    goos:
+      - darwin
+    goarch:
+      - amd64
+    env:
+      - CGO_ENABLED=1
+      - CC=o64-clang
+      - CXX=o64-clang++
+
+  - id: darwin-arm64
+    dir: proxy
+    main: ./cmd/proxy
+    binary: claude-code-proxy
+    goos:
+      - darwin
+    goarch:
+      - arm64
+    env:
+      - CGO_ENABLED=1
+      - CC=oa64-clang
+      - CXX=oa64-clang++
+
+archives:
+  - formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+      - "^chore:"

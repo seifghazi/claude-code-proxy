@@ -147,6 +147,41 @@ type AnthropicRequest struct {
 	ToolChoice  interface{}              `json:"tool_choice,omitempty"`
 }
 
+func (r *AnthropicRequest) UnmarshalJSON(data []byte) error {
+	// Use an alias to avoid infinite recursion
+	type Alias AnthropicRequest
+	aux := &struct {
+		System json.RawMessage `json:"system,omitempty"`
+		*Alias
+	}{
+		Alias: (*Alias)(r),
+	}
+
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+
+	if len(aux.System) == 0 {
+		return nil
+	}
+
+	// Try as array first
+	var systemMessages []AnthropicSystemMessage
+	if err := json.Unmarshal(aux.System, &systemMessages); err == nil {
+		r.System = systemMessages
+		return nil
+	}
+
+	// Try as string
+	var systemStr string
+	if err := json.Unmarshal(aux.System, &systemStr); err == nil {
+		r.System = []AnthropicSystemMessage{{Type: "text", Text: systemStr}}
+		return nil
+	}
+
+	return json.Unmarshal(aux.System, &r.System)
+}
+
 type ModelsResponse struct {
 	Object string      `json:"object"`
 	Data   []ModelInfo `json:"data"`
