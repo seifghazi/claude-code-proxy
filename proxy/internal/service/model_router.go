@@ -226,7 +226,8 @@ func (r *ModelRouter) getProviderNameForModel(model string) string {
 			return pattern.provider
 		}
 	}
-	// Default to anthropic (this is an Anthropic proxy after all)
-	r.logger.Printf("ℹ️  Model '%s' has no matching pattern, defaulting to anthropic", model)
-	return "anthropic"
+	// Default to OpenAI, as Anthropic models are covered by the providerPatterns,
+	// and other unknown models are likely served by custom OpenAI compatible
+	// backends.
+	return "openai"
 }
