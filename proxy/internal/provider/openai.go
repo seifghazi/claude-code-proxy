@@ -602,11 +602,11 @@ func transformOpenAIStreamToAnthropic(openAIStream io.ReadCloser, anthropicStrea
 			if data == "[DONE]" {
 				// Send Anthropic-style completion
 				if contentStarted {
-					fmt.Fprintf(anthropicStream, "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n")
+					fmt.Fprintf(anthropicStream, "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n")
 				}
 				if messageStarted {
-					fmt.Fprintf(anthropicStream, "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null}}\n\n")
-					fmt.Fprintf(anthropicStream, "data: {\"type\":\"message_stop\"}\n\n")
+					fmt.Fprintf(anthropicStream, "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null}}\n\n")
+					fmt.Fprintf(anthropicStream, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
 				}
 				break
 			}
@@ -644,7 +644,7 @@ func transformOpenAIStreamToAnthropic(openAIStream io.ReadCloser, anthropicStrea
 						"usage": anthropicUsage,
 					}
 					usageJSON, _ := json.Marshal(usageDelta)
-					fmt.Fprintf(anthropicStream, "data: %s\n\n", usageJSON)
+					fmt.Fprintf(anthropicStream, "event: message_delta\ndata: %s\n\n", usageJSON)
 				}
 			}
 
@@ -684,7 +684,7 @@ func transformOpenAIStreamToAnthropic(openAIStream io.ReadCloser, anthropicStrea
 					},
 				}
 				startJSON, _ := json.Marshal(messageStart)
-				fmt.Fprintf(anthropicStream, "data: %s\n\n", startJSON)
+				fmt.Fprintf(anthropicStream, "event: message_start\ndata: %s\n\n", startJSON)
 			}
 
 			// Handle content
@@ -701,7 +701,7 @@ func transformOpenAIStreamToAnthropic(openAIStream io.ReadCloser, anthropicStrea
 						},
 					}
 					blockStartJSON, _ := json.Marshal(blockStart)
-					fmt.Fprintf(anthropicStream, "data: %s\n\n", blockStartJSON)
+					fmt.Fprintf(anthropicStream, "event: content_block_start\ndata: %s\n\n", blockStartJSON)
 				}
 
 				// Send content_block_delta
@@ -714,7 +714,7 @@ func transformOpenAIStreamToAnthropic(openAIStream io.ReadCloser, anthropicStrea
 					},
 				}
 				deltaJSON, _ := json.Marshal(contentDelta)
-				fmt.Fprintf(anthropicStream, "data: %s\n\n", deltaJSON)
+				fmt.Fprintf(anthropicStream, "event: content_block_delta\ndata: %s\n\n", deltaJSON)
 			}
 
 		}

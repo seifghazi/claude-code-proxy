@@ -282,14 +282,23 @@ func (h *Handler) handleStreamingResponse(w http.ResponseWriter, resp *http.Resp
 	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() {
 		line := scanner.Text()
-		if line == "" || !strings.HasPrefix(line, "data:") {
-			continue
+
+		// Forward every line to the client as-is, preserving the full SSE
+		// protocol (event: lines, data: lines, and blank separators).
+		fmt.Fprintf(w, "%s\n", line)
+		if line == "" {
+			// Blank line = SSE event boundary; flush to client.
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
 		}
 
-		streamingChunks = append(streamingChunks, line)
-		fmt.Fprintf(w, "%s\n\n", line)
-		if f, ok := w.(http.Flusher); ok {
-			f.Flush()
+		if line != "" {
+			streamingChunks = append(streamingChunks, line)
+		}
+
+		if !strings.HasPrefix(line, "data:") {
+			continue
 		}
 
 		jsonData := strings.TrimPrefix(line, "data: ")

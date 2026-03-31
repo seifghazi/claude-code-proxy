@@ -513,7 +513,7 @@ function ResponseDetails({ response }: { response: NonNullable<Request['response
   // Parse streaming chunks to extract the final assembled text
   const parseStreamingResponse = (chunks: string[]) => {
     let assembledText = '';
-    let rawData = chunks.join('');
+    let rawData = chunks.join('\n');
     
     try {
       // Split by lines and process each SSE event
