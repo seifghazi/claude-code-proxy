@@ -243,6 +243,14 @@ func (h *Handler) NotFound(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleStreamingResponse(w http.ResponseWriter, resp *http.Response, requestLog *model.RequestLog, startTime time.Time) {
 
+	// Forward all upstream response headers so clients see the full
+	// Anthropic metadata (request-id, rate-limits, server-timing, etc.)
+	for key, values := range resp.Header {
+		for _, v := range values {
+			w.Header().Add(key, v)
+		}
+	}
+	// Ensure SSE essentials are set (may already be present from upstream)
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -282,15 +290,20 @@ func (h *Handler) handleStreamingResponse(w http.ResponseWriter, resp *http.Resp
 	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() {
 		line := scanner.Text()
+
+		// Forward every line (including event: prefixes and blank
+		// separators) so the client sees the original SSE stream.
+		fmt.Fprintf(w, "%s\n", line)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+
+		// Only parse data: lines for DB storage
 		if line == "" || !strings.HasPrefix(line, "data:") {
 			continue
 		}
 
 		streamingChunks = append(streamingChunks, line)
-		fmt.Fprintf(w, "%s\n\n", line)
-		if f, ok := w.(http.Flusher); ok {
-			f.Flush()
-		}
 
 		jsonData := strings.TrimPrefix(line, "data: ")
 
