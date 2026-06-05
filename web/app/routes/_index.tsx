@@ -147,6 +147,7 @@ export default function Index() {
   const [viewMode, setViewMode] = useState<"requests" | "conversations">("requests");
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isConversationModalOpen, setIsConversationModalOpen] = useState(false);
+  const [rawView, setRawView] = useState(false);
   const [modelFilter, setModelFilter] = useState<string>("all");
   const [isFetching, setIsFetching] = useState(false);
   const [isPending, startTransition] = useTransition();
@@ -346,6 +347,7 @@ export default function Index() {
     const request = requests.find(r => r.id === requestId);
     if (request) {
       setSelectedRequest(request);
+      setRawView(false);
       setIsModalOpen(true);
     }
   };
@@ -353,6 +355,7 @@ export default function Index() {
   const closeModal = () => {
     setIsModalOpen(false);
     setSelectedRequest(null);
+    setRawView(false);
   };
 
   const getToolStats = () => {
@@ -844,16 +847,40 @@ export default function Index() {
                   <FileText className="w-5 h-5 text-blue-600" />
                   <h3 className="text-lg font-semibold text-gray-900">Request Details</h3>
                 </div>
-                <button 
-                  onClick={closeModal}
-                  className="text-gray-400 hover:text-gray-600 transition-colors p-2 hover:bg-gray-100 rounded-lg"
-                >
-                  <X className="w-5 h-5" />
-                </button>
+                <div className="flex items-center space-x-3">
+                  <div className="inline-flex items-center bg-gray-200 rounded p-0.5">
+                    <button
+                      onClick={() => setRawView(false)}
+                      className={`px-3 py-1 text-xs font-medium rounded transition-colors ${
+                        !rawView ? "bg-white text-gray-900 shadow-sm" : "text-gray-600 hover:text-gray-900"
+                      }`}
+                    >
+                      Formatted
+                    </button>
+                    <button
+                      onClick={() => setRawView(true)}
+                      className={`px-3 py-1 text-xs font-medium rounded transition-colors ${
+                        rawView ? "bg-white text-gray-900 shadow-sm" : "text-gray-600 hover:text-gray-900"
+                      }`}
+                    >
+                      Raw
+                    </button>
+                  </div>
+                  <button
+                    onClick={closeModal}
+                    className="text-gray-400 hover:text-gray-600 transition-colors p-2 hover:bg-gray-100 rounded-lg"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
               </div>
             </div>
             <div className="p-6 overflow-y-auto max-h-[calc(90vh-100px)]">
-              <RequestDetailContent request={selectedRequest} onGrade={() => gradeRequest(selectedRequest.id)} />
+              {rawView ? (
+                <RawRequestView request={selectedRequest} />
+              ) : (
+                <RequestDetailContent request={selectedRequest} onGrade={() => gradeRequest(selectedRequest.id)} />
+              )}
             </div>
           </div>
         </div>
@@ -909,6 +936,49 @@ export default function Index() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function RawRequestView({ request }: { request: Request }) {
+  const [copied, setCopied] = useState(false);
+  const raw = JSON.stringify(request, null, 2);
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(raw);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (error) {
+      console.error('Failed to copy:', error);
+    }
+  };
+
+  return (
+    <div className="bg-gray-50 border border-gray-200 rounded-xl overflow-hidden">
+      <div className="bg-gray-100 px-4 py-2 border-b border-gray-200 flex items-center justify-between">
+        <span className="text-xs font-semibold text-gray-700 uppercase tracking-wider">Raw Request JSON</span>
+        <button
+          onClick={handleCopy}
+          className="flex items-center space-x-1.5 px-2.5 py-1 text-xs font-medium text-gray-600 bg-white border border-gray-200 rounded hover:bg-gray-50 transition-colors"
+          title="Copy raw JSON"
+        >
+          {copied ? (
+            <>
+              <Check className="w-3.5 h-3.5 text-green-600" />
+              <span className="text-green-600">Copied</span>
+            </>
+          ) : (
+            <>
+              <Copy className="w-3.5 h-3.5" />
+              <span>Copy</span>
+            </>
+          )}
+        </button>
+      </div>
+      <pre className="p-4 text-xs text-gray-800 font-mono overflow-x-auto whitespace-pre leading-relaxed">
+        {raw}
+      </pre>
     </div>
   );
 }
